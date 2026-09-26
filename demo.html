@@ -36,7 +36,7 @@
   .card p { margin: 0 0 16px; color: #c3c2b7; font-size: 14px; }
   .card .small { color: #8d8c83; font-size: 12.5px; margin: 14px 0 0; }
   .seg { display: flex; background: #232321; border: 1px solid #34332f; border-radius: 12px; padding: 3px; margin-bottom: 16px; }
-  .seg button { flex: 1; border: 0; background: transparent; color: #c3c2b7; padding: 10px 0; border-radius: 9px; font: 600 14px -apple-system, sans-serif; }
+  .seg button { flex: 1; border: 0; background: transparent; color: #c3c2b7; padding: 10px 0; border-radius: 9px; font: 600 13.5px -apple-system, sans-serif; }
   .seg button.on { background: #3987e5; color: #fff; }
   .big { width: 100%; border: 0; border-radius: 12px; padding: 14px; font: 700 17px -apple-system, sans-serif;
     background: #d95926; color: #fff; }
@@ -61,7 +61,7 @@
     <h1 id="menuTitle">Robot Air Hockey</h1>
     <p id="menuSub">You vs a robot driven by 4 cable servos.<br>First to 7 wins.</p>
     <div class="seg" id="diff">
-      <button data-d="easy">Easy</button><button data-d="normal" class="on">Normal</button><button data-d="hard">Hard</button>
+      <button data-d="toddler">Toddler</button><button data-d="easy">Easy</button><button data-d="normal" class="on">Normal</button><button data-d="hard">Hard</button>
     </div>
     <button class="big" id="playBtn">Play</button>
     <button class="ghost hidden" id="restartBtn" style="display:none">Restart match</button>
@@ -75,7 +75,7 @@
 const W = 1600, H = 900;
 const PUCK_R = 32, MALLET_R = 48, GOAL_W = 260;
 const SPOOL_OFF = 70, SPOOL_DRAW_R = 34, VIEW_M = 122;
-const SUBSTEPS = 10, MAX_PUCK_SPEED = 12000, WIN_SCORE = 7;
+const SUBSTEPS = 10, WIN_SCORE = 7;
 const FINGER_OFFSET = 36; // css px: mallet sits just above the fingertip so it stays visible
 const COLORS = ['#3987e5', '#d95926', '#199e70', '#c98500'];
 const spools = [
@@ -90,11 +90,17 @@ const P = {
   servoRPM: 1200, spoolD: 40, pusherMax: 3500, pusherAcc: 25000,
   camFps: 120, latency: 40, noise: 2, alpha: 0.6,
   windup: 70, defLine: 90, reactMargin: 30,
+  maxPuck: 12000, missChance: 0, // missChance: odds the robot misjudges an incoming shot
 };
+const BASE = { ...P };
+// Each level overrides BASE; anything not listed falls back to the BASE value.
 const DIFF = {
-  easy:   { servoRPM: 650,  pusherAcc: 12000, latency: 90, noise: 4,   reactMargin: 70 },
-  normal: { servoRPM: 1200, pusherAcc: 25000, latency: 40, noise: 2,   reactMargin: 30 },
-  hard:   { servoRPM: 2200, pusherAcc: 45000, latency: 15, noise: 1,   reactMargin: 10 },
+  toddler: { servoRPM: 300, pusherMax: 1500, pusherAcc: 4000, latency: 160, noise: 3, reactMargin: 150,
+             windup: 40, missChance: 0.5, drag: 0.2, maxPuck: 3500 },
+  easy:    { servoRPM: 450, pusherAcc: 9000, latency: 110, noise: 3, reactMargin: 90,
+             windup: 40, missChance: 0.2, drag: 0.3, maxPuck: 7000 },
+  normal:  { servoRPM: 1200, pusherAcc: 25000, latency: 40, noise: 2, reactMargin: 30 },
+  hard:    { servoRPM: 2200, pusherAcc: 45000, latency: 15, noise: 1, reactMargin: 10 },
 };
 
 // ---------- State ----------
@@ -137,7 +143,8 @@ const sGoal = good => { const b = good ? [523, 659, 784] : [392, 330, 262]; b.fo
 
 // ---------- Menu / HUD ----------
 function applyDiff(d) {
-  state.diff = d; Object.assign(P, DIFF[d]);
+  state.diff = d; Object.assign(P, BASE, DIFF[d]);
+  try { localStorage.setItem('biscuitbot-diff', d); } catch (e) { /* private mode */ }
   for (const b of $('diff').children) b.classList.toggle('on', b.dataset.d === d);
 }
 for (const b of $('diff').children) b.onclick = () => applyDiff(b.dataset.d);
@@ -411,6 +418,20 @@ function aiUpdate() {
   const speed = Math.hypot(est.vx, est.vy);
   const sS = strikeSpeed(), wind = P.windup, tL = lungeTime(wind), margin = P.reactMargin / 1000;
 
+  // Easier levels: once per shot from the human, maybe misjudge it and wander to the wrong spot.
+  if (est.vx < -250 && !ai.approaching) { // only real shots, not a puck drifting in our half
+    ai.approaching = true;
+    ai.miss = Math.random() < P.missChance;
+    ai.missDy = (Math.random() < 0.5 ? -1 : 1) * (160 + Math.random() * 120);
+  } else if (est.x > W / 2 + PUCK_R) ai.approaching = false;
+  ai.oopsOn = ai.approaching && ai.miss && est.vx < (ai.oopsOn ? 0 : -100); // hysteresis: no flicker on noisy vx
+  if (ai.oopsOn) {
+    const pred = predictPath(est.x, est.y, est.vx, est.vy, xDef), last = pred && pointAtX(pred, xDef);
+    ai.pred = pred; ai.state = 'OOPS 😵';
+    setRobotTarget({ x: xDef + 40, y: (last ? last.y : est.y) + ai.missDy });
+    return;
+  }
+
   if (est.vx < -40) {
     const pred = predictPath(est.x, est.y, est.vx, est.vy, xDef);
     ai.pred = pred;
@@ -453,7 +474,8 @@ function aiUpdate() {
     }
   }
   const inOurHalf = est.x < robotXMax() + R * 0.8;
-  if (inOurHalf && (speed < 350 || (ai.pred && ai.pred.stopped))) {
+  ai.slowOn = inOurHalf && (speed < (ai.slowOn ? 450 : 350) || !!(ai.pred && ai.pred.stopped));
+  if (ai.slowOn) {
     const shot = chooseShot(est), g = shot.g;
     ai.shot = shot;
     const contact = { x: est.x - g.x * R, y: est.y - g.y * R };
@@ -562,7 +584,7 @@ function frame(now) {
       if (stepPuck(h)) break;
       collide(robot); collide(human);
       const sp = Math.hypot(puck.vx, puck.vy);
-      if (sp > MAX_PUCK_SPEED) { puck.vx *= MAX_PUCK_SPEED / sp; puck.vy *= MAX_PUCK_SPEED / sp; }
+      if (sp > P.maxPuck) { puck.vx *= P.maxPuck / sp; puck.vy *= P.maxPuck / sp; }
     }
     updateKinematics();
     const psp = Math.hypot(puck.vx, puck.vy);
@@ -699,7 +721,9 @@ function draw() {
 }
 
 // ---------- Start ----------
-applyDiff('normal');
+let savedDiff = null;
+try { savedDiff = localStorage.getItem('biscuitbot-diff'); } catch (e) { /* private mode */ }
+applyDiff(DIFF[savedDiff] ? savedDiff : 'normal');
 resize();
 updateKinematics();
 requestAnimationFrame(frame);
