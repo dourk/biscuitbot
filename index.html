@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cable-Robot Air Hockey — Human vs Robot</title>
+<style>
+  :root {
+    --bg: #121211;
+    --surface-1: #1a1a19;
+    --surface-2: #232321;
+    --border: #34332f;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #8d8c83;
+    --accent: #3987e5;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text-primary);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  #app { display: flex; height: 100vh; }
+  #stage { position: relative; flex: 1; min-width: 0; }
+  #table { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: none; }
+  #sidebar { width: 360px; flex: none; background: var(--surface-1); border-left: 1px solid var(--border);
+    overflow-y: auto; padding: 14px 16px 24px; }
+  h1 { font-size: 15px; margin: 0 0 2px; }
+  .sub { color: var(--text-muted); font-size: 11px; margin-bottom: 12px; }
+  h2 { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-secondary);
+    margin: 18px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border); font-weight: 600; }
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  button, select { background: var(--surface-2); color: var(--text-primary); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; }
+  button:hover, select:hover { border-color: #55544e; }
+  button.on { background: var(--accent); border-color: var(--accent); }
+  #aiBtn { flex: 1 1 100%; padding: 9px; font-weight: 600; }
+  .check { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--text-secondary); cursor: pointer; }
+  .selrow { display: flex; justify-content: space-between; align-items: center; margin: 10px 0; color: var(--text-secondary); }
+  .slider { margin: 10px 0; }
+  .slider .row { display: flex; justify-content: space-between; color: var(--text-secondary); }
+  .slider .val { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-primary); }
+  input[type=range] { width: 100%; accent-color: var(--accent); margin: 4px 0 0; }
+  table.mt { width: 100%; border-collapse: collapse; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+  table.mt th { color: var(--text-muted); font-weight: 500; text-align: right; padding: 3px 4px; border-bottom: 1px solid var(--border); }
+  table.mt td { text-align: right; padding: 3px 4px; color: var(--text-primary); }
+  table.mt th:first-child, table.mt td:first-child { text-align: left; }
+  .sw { display: inline-block; vertical-align: middle; margin-right: 5px; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; color: var(--text-secondary); font-size: 11px; margin-bottom: 4px; }
+  #chart { width: 100%; height: 170px; display: block; background: var(--surface-1); }
+  .note { color: var(--text-muted); font-size: 11px; margin-top: 6px; }
+  kbd { background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; font-size: 11px; }
+
+  #readout { position: absolute; left: 12px; bottom: 12px; background: rgba(18,18,17,.88); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px; font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    pointer-events: none; white-space: pre; color: var(--text-secondary); }
+  #readout b { color: var(--text-primary); font-weight: 600; }
+  #readout .h { color: var(--text-muted); letter-spacing: .06em; }
+  #score { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); background: rgba(18,18,17,.88);
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 16px; font-weight: 700; font-size: 16px;
+    pointer-events: none; white-space: nowrap; }
+  #score span { color: var(--text-muted); font-weight: 400; font-size: 11px; margin: 0 8px; }
+  #banner { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); font-size: 36px; font-weight: 800;
+    color: #fff; text-shadow: 0 2px 14px rgba(0,0,0,.7); pointer-events: none; opacity: 0; transition: opacity .25s; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="table"></canvas>
+    <div id="readout"></div>
+    <div id="score"></div>
+    <div id="banner"></div>
+  </div>
+
+  <aside id="sidebar">
+    <h1>Cable-Robot Air Hockey</h1>
+    <div class="sub">Human (right) vs 4-servo cable robot (left) · table 1600 × 900 mm</div>
+
+    <h2>Match</h2>
+    <div class="btns">
+      <button id="aiBtn" class="on">Robot AI: ON</button>
+      <button id="serveBtn">Face-off (Space)</button>
+      <button id="pauseBtn">Pause (P)</button>
+      <button id="resetBtn">New match</button>
+    </div>
+    <div class="selrow"><span>Robot shot selection</span>
+      <select id="aimMode">
+        <option value="auto">Auto (open lane)</option>
+        <option value="direct">Direct only</option>
+        <option value="bank">Bank shots</option>
+        <option value="defend">Defend only (no aim)</option>
+      </select></div>
+    <label class="check"><input type="checkbox" id="showPred" checked> Show robot's predicted trajectory &amp; shot</label>
+    <label class="check"><input type="checkbox" id="showVision" checked> Show camera observations &amp; estimate</label>
+    <label class="check"><input type="checkbox" id="showReadout" checked> Show telemetry overlay (H)</label>
+    <div class="note">You: move the mouse over your half (right), or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>.
+      <kbd>T</kbd> toggles robot AI, <kbd>P</kbd> pauses. First to 7 wins.</div>
+
+    <h2>Puck</h2>
+    <div id="grp-puck"></div>
+    <h2>Human mallet</h2>
+    <div id="grp-human"></div>
+    <h2>Robot servos &amp; carriage</h2>
+    <div id="grp-robot"></div>
+    <h2>Vision tracking</h2>
+    <div id="grp-vision"></div>
+    <label class="check"><input type="checkbox" id="latComp" checked> Latency compensation (extrapolate to now)</label>
+    <h2>Robot AI</h2>
+    <div id="grp-ai"></div>
+    <h2>Simulation</h2>
+    <div id="grp-sim"></div>
+
+    <h2>Servo requirements (peaks)</h2>
+    <table class="mt">
+      <thead><tr><th>Spool</th><th>|ΔL/Δt|<br>mm/s</th><th>RPM</th><th>Tension<br>N</th><th>Torque<br>N·cm</th></tr></thead>
+      <tbody id="peakBody"></tbody>
+    </table>
+    <div class="note" id="peakExtra"></div>
+    <div class="btns" style="margin-top:8px"><button id="peakReset">Reset peaks</button></div>
+
+    <h2>Line speed ΔL/Δt · last 5 s</h2>
+    <div class="legend" id="legend"></div>
+    <canvas id="chart"></canvas>
+    <div class="note">Positive = paying out, negative = reeling in. Dashed grey = servo line-speed limit. Hover for values.</div>
+  </aside>
+</div>
+
+<script>
+'use strict';
+// ---------- Geometry (world units = mm, y down; readouts show y up) ----------
+const W = 1600, H = 900;
+const PUCK_R = 32, MALLET_R = 48, GOAL_W = 260;
+const SPOOL_OFF = 70, SPOOL_DRAW_R = 34, VIEW_M = 150;
+const SUBSTEPS = 10, MAX_PUCK_SPEED = 12000, WIN_SCORE = 7;
+const COLORS = ['#3987e5', '#d95926', '#199e70', '#c98500'];
+const DASH = [[], [9, 5], [2.5, 4], [12, 4, 2.5, 4]];
+const SPOOL_NAMES = ['L1', 'L2', 'L3', 'L4'];
+const SPOOL_POS = ['robot-end top', 'centre top', 'centre bottom', 'robot-end bottom'];
+// Spools frame the robot's half only, so no cable ever crosses the human's side.
+const spools = [
+  { x: -SPOOL_OFF, y: -SPOOL_OFF }, { x: W / 2, y: -SPOOL_OFF },
+  { x: W / 2, y: H + SPOOL_OFF }, { x: -SPOOL_OFF, y: H + SPOOL_OFF },
+];
+
+// ---------- Tunables ----------
+const P = {
+  drag: 0.15, friction: 60, elasticity: 0.85, restitution: 0.9,
+  humanMax: 6000, humanAcc: 60000,
+  servoRPM: 1200, spoolD: 40, pusherMax: 3500, pusherAcc: 25000, mass: 0.35, pretension: 5,
+  camFps: 120, latency: 40, noise: 2, alpha: 0.6,
+  windup: 70, defLine: 90, reactMargin: 30,
+  timeScale: 1,
+  aimMode: 'auto', latComp: true,
+};
+const SLIDERS = [
+  { g: 'puck', k: 'drag', label: 'Air drag (∝ v)', min: 0, max: 2, step: 0.01, unit: '1/s', dp: 2 },
+  { g: 'puck', k: 'friction', label: 'Surface friction (const. decel)', min: 0, max: 800, step: 5, unit: 'mm/s²', dp: 0 },
+  { g: 'puck', k: 'elasticity', label: 'Wall bounce elasticity', min: 0, max: 1, step: 0.01, unit: '', dp: 2 },
+  { g: 'puck', k: 'restitution', label: 'Mallet hit restitution', min: 0, max: 1, step: 0.01, unit: '', dp: 2 },
+  { g: 'human', k: 'humanMax', label: 'Human mallet max speed', min: 500, max: 10000, step: 100, unit: 'mm/s', dp: 0 },
+  { g: 'human', k: 'humanAcc', label: 'Human mallet max accel', min: 5000, max: 150000, step: 1000, unit: 'mm/s²', dp: 0 },
+  { g: 'robot', k: 'servoRPM', label: 'Servo max speed', min: 60, max: 4000, step: 10, unit: 'RPM', dp: 0 },
+  { g: 'robot', k: 'spoolD', label: 'Spool / drum diameter', min: 10, max: 120, step: 1, unit: 'mm', dp: 0 },
+  { g: 'robot', k: 'pusherMax', label: 'Carriage max speed', min: 200, max: 8000, step: 50, unit: 'mm/s', dp: 0 },
+  { g: 'robot', k: 'pusherAcc', label: 'Carriage max accel', min: 1000, max: 80000, step: 500, unit: 'mm/s²', dp: 0 },
+  { g: 'robot', k: 'mass', label: 'Carriage moving mass', min: 0.05, max: 2, step: 0.05, unit: 'kg', dp: 2 },
+  { g: 'robot', k: 'pretension', label: 'Min cable pretension', min: 0.5, max: 30, step: 0.5, unit: 'N', dp: 1 },
+  { g: 'vision', k: 'camFps', label: 'Camera frame rate', min: 15, max: 240, step: 5, unit: 'fps', dp: 0 },
+  { g: 'vision', k: 'latency', label: 'Pipeline latency', min: 0, max: 200, step: 1, unit: 'ms', dp: 0 },
+  { g: 'vision', k: 'noise', label: 'Position noise (1σ)', min: 0, max: 20, step: 0.5, unit: 'mm', dp: 1 },
+  { g: 'vision', k: 'alpha', label: 'Tracker gain α (β = α²/(2−α))', min: 0.1, max: 1, step: 0.05, unit: '', dp: 2 },
+  { g: 'ai', k: 'windup', label: 'Strike wind-up distance', min: 10, max: 200, step: 5, unit: 'mm', dp: 0 },
+  { g: 'ai', k: 'defLine', label: 'Last-ditch defence line', min: 50, max: 300, step: 5, unit: 'mm', dp: 0 },
+  { g: 'ai', k: 'reactMargin', label: 'Intercept safety margin', min: 0, max: 200, step: 5, unit: 'ms', dp: 0 },
+  { g: 'sim', k: 'timeScale', label: 'Simulation time scale', min: 0.05, max: 1, step: 0.05, unit: '×', dp: 2 },
+];
+
+// ---------- State ----------
+const state = { aiOn: true, paused: false, showPred: true, showVision: true, input: 'mouse',
+  score: { robot: 0, human: 0 }, hits: { robot: 0, human: 0 }, simTime: 0, slowTimer: 0, bannerTimer: 0 };
+const puck = { x: W * 0.75, y: H / 2, vx: 0, vy: 0 };
+const robot = { x: 150, y: H / 2, vx: 0, vy: 0, ax: 0, ay: 0, sat: false };
+const human = { x: W - 150, y: H / 2, vx: 0, vy: 0, ax: 0, ay: 0 };
+const robotTarget = { x: 150, y: H / 2 };
+const humanTarget = { x: W - 150, y: H / 2 };
+const keys = {};
+const kin = { L: [0, 0, 0, 0], Lprev: null, dL: [0, 0, 0, 0], T: [0, 0, 0, 0], feasible: true, ang: [0, 0, 0, 0] };
+const peaks = { dL: [0, 0, 0, 0], T: [0, 0, 0, 0], v: 0, a: 0, puckV: 0, satTime: 0, runTime: 0 };
+const history = [];
+const cam = { timer: 0, queue: [], trail: [], f: null, est: null, err: 0, verr: 0 };
+const ai = { state: 'HOME', pred: null, intercept: null, shot: null, commit: null };
+let wallFlash = [];
+
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const $ = id => document.getElementById(id);
+const lineLimit = () => P.servoRPM / 60 * Math.PI * P.spoolD; // max cable speed, mm/s
+const robotXMax = () => W / 2 - MALLET_R - 10;
+const clampRobot = p => ({ x: clamp(p.x, MALLET_R, robotXMax()), y: clamp(p.y, MALLET_R, H - MALLET_R) });
+const clampHuman = p => ({ x: clamp(p.x, W / 2 + MALLET_R, W - MALLET_R), y: clamp(p.y, MALLET_R, H - MALLET_R) });
+function gauss() { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+
+// ---------- UI build ----------
+for (const s of SLIDERS) {
+  const wrap = document.createElement('div');
+  wrap.className = 'slider';
+  wrap.innerHTML = `<div class="row"><span>${s.label}</span><span class="val"></span></div>
+    <input type="range" min="${s.min}" max="${s.max}" step="${s.step}" value="${P[s.k]}">`;
+  const input = wrap.querySelector('input'), val = wrap.querySelector('.val');
+  const show = () => { val.textContent = Number(P[s.k]).toFixed(s.dp) + (s.unit ? ' ' + s.unit : ''); };
+  input.addEventListener('input', () => { P[s.k] = parseFloat(input.value); show(); });
+  show();
+  $('grp-' + s.g).appendChild(wrap);
+}
+const swatch = i => `<svg class="sw" width="22" height="8"><line x1="1" y1="4" x2="21" y2="4" stroke="${COLORS[i]}"
+  stroke-width="2" stroke-linecap="round" stroke-dasharray="${DASH[i].join(',')}"/></svg>`;
+$('legend').innerHTML = SPOOL_NAMES.map((n, i) => `<span>${swatch(i)}${n}</span>`).join('');
+
+function setAI(on) {
+  state.aiOn = on; ai.commit = null;
+  $('aiBtn').textContent = 'Robot AI: ' + (on ? 'ON' : 'OFF (holds home)');
+  $('aiBtn').classList.toggle('on', on);
+}
+function setPause(p) {
+  state.paused = p;
+  $('pauseBtn').textContent = p ? 'Resume (P)' : 'Pause (P)';
+  $('pauseBtn').classList.toggle('on', p);
+}
+function setReadout(on) { $('showReadout').checked = on; $('readout').style.display = on ? '' : 'none'; }
+function resetPeaks() { peaks.dL.fill(0); peaks.T.fill(0); peaks.v = peaks.a = peaks.puckV = peaks.satTime = peaks.runTime = 0; }
+$('aiBtn').onclick = () => setAI(!state.aiOn);
+$('serveBtn').onclick = () => faceOff('human');
+$('pauseBtn').onclick = () => setPause(!state.paused);
+$('resetBtn').onclick = newMatch;
+$('peakReset').onclick = resetPeaks;
+$('aimMode').onchange = e => { P.aimMode = e.target.value; };
+$('showPred').onchange = e => { state.showPred = e.target.checked; };
+$('showVision').onchange = e => { state.showVision = e.target.checked; };
+$('showReadout').onchange = e => setReadout(e.target.checked);
+$('latComp').onchange = e => { P.latComp = e.target.checked; };
+
+// ---------- Input (human player) ----------
+const canvas = $('table'), ctx = canvas.getContext('2d');
+const view = { sc: 1, ox: 0, oy: 0, dpr: 1 };
+canvas.addEventListener('mousemove', e => {
+  const r = canvas.getBoundingClientRect();
+  humanTarget.x = (e.clientX - r.left - view.ox) / view.sc;
+  humanTarget.y = (e.clientY - r.top - view.oy) / view.sc;
+  state.input = 'mouse';
+});
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (e.target.tagName === 'SELECT') return;
+  if (k.length === 1 && 'wasd'.includes(k)) { keys[k] = true; state.input = 'keys'; }
+  else if (k === ' ') { e.preventDefault(); faceOff('human'); }
+  else if (k === 'p') setPause(!state.paused);
+  else if (k === 't') setAI(!state.aiOn);
+  else if (k === 'h') setReadout($('readout').style.display === 'none');
+});
+window.addEventListener('keyup', e => {
+  const k = e.key.toLowerCase();
+  if (k.length === 1 && 'wasd'.includes(k)) {
+    keys[k] = false;
+    if (!keys.w && !keys.a && !keys.s && !keys.d) { humanTarget.x = human.x; humanTarget.y = human.y; }
+  }
+});
+window.addEventListener('blur', () => { keys.w = keys.a = keys.s = keys.d = false; });
+function updateHumanKeys() {
+  if (state.input !== 'keys') return;
+  const dx = (keys.d ? 1 : 0) - (keys.a ? 1 : 0), dy = (keys.s ? 1 : 0) - (keys.w ? 1 : 0);
+  if (dx || dy) { const d = Math.hypot(dx, dy); humanTarget.x = human.x + dx / d * 400; humanTarget.y = human.y + dy / d * 400; }
+}
+
+// ---------- Match flow ----------
+function faceOff(side) {
+  // Puck is placed, stationary, on the side of whoever conceded (or the human for a manual face-off).
+  puck.x = side === 'robot' ? W * 0.25 : W * 0.75;
+  puck.y = H / 2 + (Math.random() - 0.5) * 200;
+  puck.vx = puck.vy = 0;
+  state.slowTimer = 0; ai.commit = null; cam.f = null; cam.queue.length = 0;
+}
+function newMatch() {
+  state.score.robot = state.score.human = 0; state.hits.robot = state.hits.human = 0;
+  resetPeaks();
+  robot.x = robotTarget.x = 150; robot.y = robotTarget.y = H / 2; robot.vx = robot.vy = 0;
+  kin.Lprev = null; // carriage teleported: don't count the jump as cable motion
+  faceOff('human');
+}
+function banner(text, color, t) {
+  const b = $('banner'); b.textContent = text; b.style.color = color; b.style.opacity = 1; state.bannerTimer = t;
+}
+function goal(robotScored) {
+  if (robotScored) state.score.robot++; else state.score.human++;
+  if (state.score.robot >= WIN_SCORE || state.score.human >= WIN_SCORE) {
+    banner(robotScored ? 'ROBOT WINS' : 'YOU WIN', robotScored ? '#8fb8ef' : '#ffb199', 2.5);
+    const keepPeaks = { ...peaks };
+    newMatch(); Object.assign(peaks, keepPeaks);
+    return;
+  }
+  banner(robotScored ? 'ROBOT SCORES' : 'GOAL!', robotScored ? '#8fb8ef' : '#ffb199', 1.1);
+  faceOff(robotScored ? 'human' : 'robot');
+}
+
+// ---------- Puck motion model (shared by sim and predictor) ----------
+// dv/dt = -k·v - f   (k = air drag, f = constant surface friction). Returns time/speed after distance s.
+function travel(v0, s) {
+  const k = P.drag, f = P.friction;
+  if (v0 <= 1e-6) return { reached: s <= 0, t: 0, s: 0, v: 0 };
+  if (k < 1e-6) {
+    if (f < 1e-6) return { reached: true, t: s / v0, s, v: v0 };
+    const ts = v0 / f, smax = v0 * ts / 2;
+    if (s >= smax) return { reached: false, t: ts, s: smax, v: 0 };
+    const t = (v0 - Math.sqrt(v0 * v0 - 2 * f * s)) / f;
+    return { reached: true, t, s, v: v0 - f * t };
+  }
+  const c = v0 + f / k;
+  const D = t => c * (1 - Math.exp(-k * t)) / k - f * t / k;
+  const V = t => c * Math.exp(-k * t) - f / k;
+  if (f < 1e-6) {
+    const smax = v0 / k;
+    if (s >= smax) return { reached: false, t: Infinity, s: smax, v: 0 };
+    const t = -Math.log(1 - k * s / v0) / k;
+    return { reached: true, t, s, v: V(t) };
+  }
+  const ts = Math.log(k * c / f) / k, smax = D(ts);
+  if (s >= smax) return { reached: false, t: ts, s: smax, v: 0 };
+  let lo = 0, hi = ts;
+  for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; if (D(m) < s) lo = m; else hi = m; }
+  return { reached: true, t: hi, s, v: V(hi) };
+}
+
+// Wall-bounce reflection predictor: straight segments between side-wall hits; each bounce
+// reflects vy scaled by elasticity (vx preserved), until the puck reaches x = xEnd.
+function predictPath(px, py, vx, vy, xEnd) {
+  const r = PUCK_R;
+  let speed = Math.hypot(vx, vy);
+  if (vx >= -1 || speed < 1 || px <= xEnd) return null;
+  let x = px, y = clamp(py, r, H - r), dx = vx / speed, dy = vy / speed, t = 0;
+  const segs = [];
+  for (let b = 0; b < 14; b++) {
+    const sx = (xEnd - x) / dx;
+    let sy = Infinity;
+    if (dy < -1e-9) sy = (r - y) / dy; else if (dy > 1e-9) sy = (H - r - y) / dy;
+    const hitWall = sy < sx;
+    const s = Math.max(0, hitWall ? sy : sx);
+    const tr = travel(speed, s);
+    const seg = { x0: x, y0: y, dx, dy, t0: t, v0: speed };
+    if (!tr.reached) {
+      seg.x1 = x + dx * tr.s; seg.y1 = y + dy * tr.s; seg.t1 = t + tr.t;
+      segs.push(seg);
+      return { segs, stopped: true };
+    }
+    x += dx * s; y += dy * s; t += tr.t; speed = tr.v;
+    seg.x1 = x; seg.y1 = y; seg.t1 = t;
+    segs.push(seg);
+    if (!hitWall) return { segs, stopped: false };
+    const ndy = -dy * P.elasticity, m = Math.hypot(dx, ndy);
+    speed *= m; dx /= m; dy = ndy / m;
+    if (speed < 1) return { segs, stopped: true };
+  }
+  return { segs, stopped: true };
+}
+function pointAtX(pred, xl) {
+  for (const s of pred.segs) {
+    if (s.x0 >= xl && s.x1 <= xl) {
+      const d = (xl - s.x0) / s.dx, tr = travel(s.v0, d);
+      return { x: xl, y: s.y0 + s.dy * d, t: s.t0 + tr.t, vx: s.dx * tr.v, vy: s.dy * tr.v };
+    }
+  }
+  return null;
+}
+
+// ---------- Vision: camera sampling + alpha-beta tracker ----------
+function cameraCapture() {
+  cam.queue.push({ t: state.simTime, x: puck.x + gauss() * P.noise, y: puck.y + gauss() * P.noise });
+}
+function reflectY(y, vy) {
+  const r = PUCK_R;
+  if (y < r) return [2 * r - y, -vy * P.elasticity];
+  if (y > H - r) return [2 * (H - r) - y, -vy * P.elasticity];
+  return [y, vy];
+}
+function trackerUpdate(o) {
+  const f = cam.f;
+  cam.trail.push(o); if (cam.trail.length > 24) cam.trail.shift();
+  if (!f) { cam.f = { x: o.x, y: o.y, vx: 0, vy: 0, t: o.t, last: o, fresh: true }; return; }
+  const dt = o.t - f.t;
+  if (dt <= 0) return;
+  let xp = f.x + f.vx * dt, [yp, vyp] = reflectY(f.y + f.vy * dt, f.vy);
+  const rx = o.x - xp, ry = o.y - yp;
+  const gate = 4 * P.noise + 15;
+  if (f.fresh || Math.hypot(rx, ry) > gate) {
+    // Measurement disagrees with the model (mallet hit / first frames): re-seed from the last two raw observations.
+    f.vx = (o.x - f.last.x) / (o.t - f.last.t); f.vy = (o.y - f.last.y) / (o.t - f.last.t);
+    f.x = o.x; f.y = o.y; f.fresh = Math.hypot(rx, ry) > gate && !f.fresh;
+  } else {
+    const a = P.alpha, b = a * a / (2 - a);
+    f.x = xp + a * rx; f.y = yp + a * ry;
+    f.vx += b * rx / dt; f.vy = vyp + b * ry / dt;
+  }
+  f.t = o.t; f.last = o;
+}
+function updateVision(dt) {
+  cam.timer += dt;
+  const period = 1 / P.camFps;
+  while (cam.timer >= period) { cam.timer -= period; cameraCapture(); }
+  const lat = P.latency / 1000;
+  while (cam.queue.length && cam.queue[0].t + lat <= state.simTime) trackerUpdate(cam.queue.shift());
+}
+function computeEstimate() {
+  const f = cam.f;
+  if (!f) { cam.est = null; return; }
+  // Extrapolate the filtered state from its measurement time to "now" (latency compensation).
+  const dt = P.latComp ? state.simTime - f.t : 0;
+  const sp = Math.hypot(f.vx, f.vy);
+  const tr = travel(sp, sp * dt);
+  const s = tr.reached ? sp * dt : tr.s, k = sp > 1e-6 ? (tr.reached ? tr.v : 0) / sp : 0;
+  const x = f.x + (sp > 1e-6 ? f.vx / sp * s : 0);
+  const [y, vy] = reflectY(f.y + (sp > 1e-6 ? f.vy / sp * s : 0), f.vy * k);
+  cam.est = { x, y, vx: f.vx * k, vy };
+  cam.err = Math.hypot(x - puck.x, y - puck.y);
+  cam.verr = Math.hypot(cam.est.vx - puck.vx, cam.est.vy - puck.vy);
+}
+
+// ---------- Robot AI ----------
+const effMax = () => Math.min(P.pusherMax, lineLimit());
+function timeToReach(p) {
+  const d = Math.hypot(p.x - robot.x, p.y - robot.y);
+  const vmax = effMax(), amax = P.pusherAcc, dAcc = vmax * vmax / amax;
+  return d < dAcc ? 2 * Math.sqrt(d / amax) : d / vmax + vmax / amax;
+}
+function lungeTime(d) { // from rest, full acceleration over distance d
+  const vmax = effMax(), amax = P.pusherAcc, dA = vmax * vmax / (2 * amax);
+  return d < dA ? Math.sqrt(2 * d / amax) : vmax / amax + (d - dA) / vmax;
+}
+const strikeSpeed = () => Math.min(effMax(), Math.sqrt(2 * P.pusherAcc * P.windup));
+function distToPath(p, path) {
+  let best = Infinity;
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i], b = path[i + 1], dx = b.x - a.x, dy = b.y - a.y;
+    const t = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1), 0, 1);
+    best = Math.min(best, Math.hypot(p.x - a.x - dx * t, p.y - a.y - dy * t));
+  }
+  return best;
+}
+// Shot options toward the human goal. Bank shots are solved exactly for wall elasticity e:
+// after the bounce the slope is scaled by e, so for slope k: goal offset b = e·k·D − e·a  ⇒  k = (b + e·a)/(e·D).
+function chooseShot(p) {
+  const r = PUCK_R, e = P.elasticity, gy = H / 2, D = W - p.x;
+  const opts = [];
+  const dd = Math.hypot(D, gy - p.y);
+  opts.push({ name: 'DIRECT', g: { x: D / dd, y: (gy - p.y) / dd }, path: [p, { x: W, y: gy }] });
+  if (e > 0.05) {
+    for (const top of [true, false]) {
+      const a = top ? p.y - r : H - r - p.y, b = top ? gy - r : H - r - gy;
+      if (a <= 0) continue;
+      const k = (b + e * a) / (e * D), xb = p.x + a / k;
+      if (xb >= W - 20) continue;
+      const m = Math.hypot(1, k);
+      opts.push({ name: top ? 'BANK TOP' : 'BANK BOTTOM', g: { x: 1 / m, y: (top ? -k : k) / m },
+        path: [p, { x: xb, y: top ? r : H - r }, { x: W, y: gy }] });
+    }
+  }
+  let list = opts;
+  if (P.aimMode === 'direct') list = [opts[0]];
+  else if (P.aimMode === 'bank' && opts.length > 1) list = opts.slice(1);
+  let best = list[0], bestScore = -Infinity;
+  for (const o of list) {
+    // Prefer the lane farthest from the human mallet; small bias toward direct (bounces bleed speed).
+    const sc = distToPath(human, o.path) + (o.name === 'DIRECT' ? 40 : 0);
+    if (sc > bestScore) { bestScore = sc; best = o; }
+  }
+  return best;
+}
+// Find the contact normal n so a mallet lunging along n at speed s sends a puck with velocity v along g.
+function solveNormal(vx, vy, g, s) {
+  if (P.aimMode === 'defend') return g;
+  const e = P.restitution;
+  let best = g, bestErr = Infinity;
+  for (let deg = -70; deg <= 70; deg += 2) {
+    const a = deg * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a);
+    const n = { x: g.x * c - g.y * sn, y: g.x * sn + g.y * c };
+    const rvn = (vx - n.x * s) * n.x + (vy - n.y * s) * n.y;
+    if (rvn >= 0) continue;
+    const ox = vx - (1 + e) * rvn * n.x, oy = vy - (1 + e) * rvn * n.y, om = Math.hypot(ox, oy);
+    if (om < 1) continue;
+    const err = 1 - (ox * g.x + oy * g.y) / om;
+    if (err < bestErr) { bestErr = err; best = n; }
+  }
+  return best;
+}
+function setRobotTarget(p) { const c = clampRobot(p); robotTarget.x = c.x; robotTarget.y = c.y; }
+function inReach(p) { return p.x >= MALLET_R - 1 && p.x <= robotXMax() + 1 && p.y >= MALLET_R - 1 && p.y <= H - MALLET_R + 1; }
+
+function aiUpdate() {
+  const R = PUCK_R + MALLET_R, xDef = P.defLine, est = cam.est;
+  ai.pred = null; ai.intercept = null; ai.shot = null;
+  const home = () => ({ x: xDef + 40, y: H / 2 + ((est ? est.y : H / 2) - H / 2) * 0.3 });
+  if (!state.aiOn) { ai.state = 'IDLE'; ai.commit = null; setRobotTarget({ x: xDef + 40, y: H / 2 }); return; }
+  if (!est) { ai.state = 'NO TRACK'; setRobotTarget(home()); return; }
+
+  // Committed strike: follow through until the lunge time is up or the puck is clearly leaving.
+  if (ai.commit) {
+    if (state.simTime < ai.commit.until && !(est.vx > 300 && est.x > robot.x + R)) {
+      ai.state = 'STRIKE'; ai.shot = ai.commit.shot; setRobotTarget(ai.commit.target); return;
+    }
+    ai.commit = null;
+  }
+  const speed = Math.hypot(est.vx, est.vy);
+  const sS = strikeSpeed(), wind = P.windup, tL = lungeTime(wind), margin = P.reactMargin / 1000;
+
+  // 1) Incoming puck: predict the bounce path; pick the furthest-forward point we can reach and wind up for.
+  if (est.vx < -40) {
+    const pred = predictPath(est.x, est.y, est.vx, est.vy, xDef);
+    ai.pred = pred;
+    if (pred && !pred.stopped) {
+      let chosen = null, deflect = null;
+      for (let xl = Math.min(robotXMax() + R * 0.7, est.x - R); xl >= xDef; xl -= 15) {
+        const pt = pointAtX(pred, xl);
+        if (!pt) continue;
+        const shot = chooseShot(pt);
+        const n = solveNormal(pt.vx, pt.vy, shot.g, sS);
+        const contact = { x: pt.x - n.x * R, y: pt.y - n.y * R };
+        if (inReach(contact)) {
+          const pre = clampRobot({ x: contact.x - n.x * wind, y: contact.y - n.y * wind });
+          if (timeToReach(pre) + tL + margin < pt.t) { chosen = { pt, shot, n, contact, pre }; break; }
+        }
+        if (!deflect) {
+          // No time to wind up: park the mallet at an angle so a passive rebound still heads for the goal.
+          const n0 = solveNormal(pt.vx, pt.vy, shot.g, 0);
+          const c0 = { x: pt.x - n0.x * R, y: pt.y - n0.y * R };
+          if (inReach(c0) && timeToReach(c0) + margin < pt.t) deflect = { pt, shot, contact: c0 };
+        }
+      }
+      if (!chosen && deflect) {
+        ai.intercept = deflect.pt; ai.shot = deflect.shot; ai.state = 'DEFLECT';
+        setRobotTarget(deflect.contact);
+        return;
+      }
+      if (chosen) {
+        ai.intercept = chosen.pt; ai.shot = chosen.shot;
+        if (chosen.pt.t > tL + 0.01) { ai.state = 'INTERCEPT'; setRobotTarget(chosen.pre); }
+        else {
+          const tgt = { x: chosen.contact.x + chosen.n.x * 150, y: chosen.contact.y + chosen.n.y * 150 };
+          ai.commit = { target: clampRobot(tgt), until: state.simTime + tL + 0.12, shot: chosen.shot };
+          ai.state = 'STRIKE'; setRobotTarget(tgt);
+        }
+        return;
+      }
+      // Can't beat it to any strike point: block the goal mouth on the defence line.
+      const last = pointAtX(pred, xDef) || { x: xDef, y: H / 2, t: 0 };
+      ai.intercept = last; ai.state = 'BLOCK';
+      setRobotTarget({ x: xDef - R * 0.5, y: clamp(last.y, H / 2 - GOAL_W / 2, H / 2 + GOAL_W / 2) });
+      return;
+    }
+  }
+
+  // 2) Slow / stopped puck in our half: line up behind it and shoot.
+  const inOurHalf = est.x < robotXMax() + R * 0.8;
+  if (inOurHalf && (speed < 350 || (ai.pred && ai.pred.stopped))) {
+    const shot = chooseShot(est), g = shot.g;
+    ai.shot = shot;
+    const contact = { x: est.x - g.x * R, y: est.y - g.y * R };
+    const pre = { x: contact.x - g.x * wind, y: contact.y - g.y * wind };
+    const dPre = Math.hypot(robot.x - pre.x, robot.y - pre.y);
+    if (dPre < 25 && Math.hypot(robot.vx, robot.vy) < 400) {
+      const tgt = { x: contact.x + g.x * 150, y: contact.y + g.y * 150 };
+      ai.commit = { target: clampRobot(tgt), until: state.simTime + tL + 0.15, shot };
+      ai.state = 'STRIKE'; setRobotTarget(tgt);
+    } else if (robot.x > est.x - R * 0.3) {
+      // We're goal-side of the puck the wrong way round: go around it, never through it.
+      ai.state = 'REPOSITION';
+      const side = robot.y < est.y ? -1 : 1;
+      let p = { x: est.x - R - 50, y: est.y + side * (R + 60) };
+      if (p.y < MALLET_R || p.y > H - MALLET_R) p.y = est.y - side * (R + 60);
+      setRobotTarget(p);
+    } else { ai.state = 'LINE UP'; setRobotTarget(pre); }
+    return;
+  }
+
+  // 3) Puck on the human's side or leaving: hold a home position biased toward the puck's lane.
+  ai.state = 'HOME'; setRobotTarget(home());
+}
+
+// ---------- Physics ----------
+// Position-controlled body with velocity/accel limits and a trapezoidal braking profile.
+// For the robot, the cable line-speed limit (servo RPM) additionally scales down the velocity.
+function stepBody(b, tgt, vmax, amax, clampFn, dt, isRobot) {
+  const t = clampFn(tgt);
+  const ex = t.x - b.x, ey = t.y - b.y, dist = Math.hypot(ex, ey);
+  const want = Math.min(vmax, Math.sqrt(2 * amax * dist * 0.9));
+  const dvx0 = (dist > 1e-6 ? ex / dist * want : 0) - b.vx;
+  const dvy0 = (dist > 1e-6 ? ey / dist * want : 0) - b.vy;
+  const dvm = Math.hypot(dvx0, dvy0), lim = amax * dt, s = dvm > lim ? lim / dvm : 1;
+  const ovx = b.vx, ovy = b.vy;
+  b.vx += dvx0 * s; b.vy += dvy0 * s;
+  if (isRobot) {
+    let worst = 0;
+    for (const sp of spools) {
+      const dx = b.x - sp.x, dy = b.y - sp.y, L = Math.hypot(dx, dy);
+      worst = Math.max(worst, Math.abs((dx * b.vx + dy * b.vy) / L));
+    }
+    const ll = lineLimit();
+    b.sat = worst > ll;
+    if (b.sat) { b.vx *= ll / worst; b.vy *= ll / worst; }
+  }
+  b.x += b.vx * dt; b.y += b.vy * dt;
+  const c = clampFn(b);
+  if (c.x !== b.x) b.vx = 0;
+  if (c.y !== b.y) b.vy = 0;
+  b.x = c.x; b.y = c.y;
+  return { ax: (b.vx - ovx) / dt, ay: (b.vy - ovy) / dt };
+}
+function stepPuck(dt) {
+  const r = PUCK_R, e = P.elasticity;
+  const sp = Math.hypot(puck.vx, puck.vy);
+  if (sp > 0) {
+    const ns = Math.max(0, sp * Math.exp(-P.drag * dt) - P.friction * dt);
+    puck.vx *= ns / sp; puck.vy *= ns / sp;
+  }
+  puck.x += puck.vx * dt; puck.y += puck.vy * dt;
+  if (puck.y < r) { puck.y = r; puck.vy = -puck.vy * e; wallFlash.push({ x: puck.x, y: 0, t: 0.25 }); }
+  if (puck.y > H - r) { puck.y = H - r; puck.vy = -puck.vy * e; wallFlash.push({ x: puck.x, y: H, t: 0.25 }); }
+
+  const mouthHalf = GOAL_W / 2 - r;
+  const inMouth = Math.abs(puck.y - H / 2) <= mouthHalf;
+  for (const side of [0, 1]) {
+    const beyond = side === 0 ? puck.x < r : puck.x > W - r;
+    if (!beyond) continue;
+    const centerPast = side === 0 ? puck.x < 0 : puck.x > W;
+    if (!inMouth && !centerPast) {
+      puck.x = side === 0 ? r : W - r; puck.vx = -puck.vx * e;
+      wallFlash.push({ x: side === 0 ? 0 : W, y: puck.y, t: 0.25 });
+    } else if (!inMouth) {
+      puck.y = clamp(puck.y, H / 2 - mouthHalf, H / 2 + mouthHalf); puck.vy = -puck.vy * e;
+    }
+  }
+  if (puck.x < -r * 1.2) { goal(false); return true; }
+  if (puck.x > W + r * 1.2) { goal(true); return true; }
+  return false;
+}
+function collide(m, who) {
+  const R = PUCK_R + MALLET_R;
+  const dx = puck.x - m.x, dy = puck.y - m.y, d = Math.hypot(dx, dy);
+  if (d >= R || d < 1e-6) return;
+  const nx = dx / d, ny = dy / d;
+  const vn = (puck.vx - m.vx) * nx + (puck.vy - m.vy) * ny;
+  if (vn < 0) {
+    // Mallets are position-controlled, so treat them as infinite mass.
+    puck.vx -= (1 + P.restitution) * vn * nx; puck.vy -= (1 + P.restitution) * vn * ny;
+    if (vn < -150) state.hits[who]++;
+  }
+  puck.x = m.x + nx * R; puck.y = m.y + ny * R;
+}
+
+// ---------- Cable kinematics & statics ----------
+// Solve 4 tensions T_i >= Tmin with Σ T_i·u_i = F (u_i: unit vector carriage→spool).
+// The minimum-total-tension solution lies at a vertex where two cables sit at Tmin.
+function solveTensions(ux, uy, Fx, Fy, Tmin) {
+  const pairs = [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]];
+  let best = null, bestSum = Infinity;
+  for (const [i, j] of pairs) {
+    const [k, l] = [0, 1, 2, 3].filter(n => n !== i && n !== j);
+    const bx = Fx - Tmin * (ux[i] + ux[j]), by = Fy - Tmin * (uy[i] + uy[j]);
+    const det = ux[k] * uy[l] - ux[l] * uy[k];
+    if (Math.abs(det) < 1e-9) continue;
+    const Tk = (bx * uy[l] - ux[l] * by) / det;
+    const Tl = (ux[k] * by - uy[k] * bx) / det;
+    if (Tk >= Tmin - 1e-6 && Tl >= Tmin - 1e-6) {
+      const sum = 2 * Tmin + Tk + Tl;
+      if (sum < bestSum) { bestSum = sum; best = [0, 0, 0, 0]; best[i] = best[j] = Tmin; best[k] = Tk; best[l] = Tl; }
+    }
+  }
+  return best;
+}
+function updateKinematics(simDt) {
+  const ux = [], uy = [];
+  for (let i = 0; i < 4; i++) {
+    const dx = robot.x - spools[i].x, dy = robot.y - spools[i].y, L = Math.hypot(dx, dy);
+    kin.L[i] = L; ux.push(-dx / L); uy.push(-dy / L);
+  }
+  if (kin.Lprev && simDt > 0) {
+    for (let i = 0; i < 4; i++) {
+      kin.dL[i] = (kin.L[i] - kin.Lprev[i]) / simDt;
+      kin.ang[i] += (kin.L[i] - kin.Lprev[i]) / (P.spoolD / 2);
+      peaks.dL[i] = Math.max(peaks.dL[i], Math.abs(kin.dL[i]));
+    }
+  }
+  kin.Lprev = kin.L.slice();
+  const T = solveTensions(ux, uy, P.mass * robot.ax / 1000, P.mass * robot.ay / 1000, P.pretension);
+  kin.feasible = !!T;
+  if (T) { kin.T = T; for (let i = 0; i < 4; i++) peaks.T[i] = Math.max(peaks.T[i], T[i]); }
+}
+
+// ---------- Main loop ----------
+let lastT = performance.now(), uiTimer = 0;
+function frame(now) {
+  const realDt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
+  const simDt = state.paused ? 0 : realDt * P.timeScale;
+
+  if (simDt > 0) {
+    computeEstimate();
+    aiUpdate();
+    updateHumanKeys();
+    const h = simDt / SUBSTEPS;
+    let ax = 0, ay = 0, sat = 0;
+    for (let i = 0; i < SUBSTEPS; i++) {
+      const a = stepBody(robot, robotTarget, P.pusherMax, P.pusherAcc, clampRobot, h, true);
+      ax += a.ax; ay += a.ay; if (robot.sat) sat++;
+      stepBody(human, humanTarget, P.humanMax, P.humanAcc, clampHuman, h, false);
+      state.simTime += h;
+      updateVision(h);
+      if (stepPuck(h)) continue;
+      collide(robot, 'robot'); collide(human, 'human');
+      const sp = Math.hypot(puck.vx, puck.vy);
+      if (sp > MAX_PUCK_SPEED) { puck.vx *= MAX_PUCK_SPEED / sp; puck.vy *= MAX_PUCK_SPEED / sp; }
+    }
+    robot.ax = ax / SUBSTEPS; robot.ay = ay / SUBSTEPS;
+    updateKinematics(simDt);
+    peaks.v = Math.max(peaks.v, Math.hypot(robot.vx, robot.vy));
+    peaks.a = Math.max(peaks.a, Math.hypot(robot.ax, robot.ay));
+    peaks.puckV = Math.max(peaks.puckV, Math.hypot(puck.vx, puck.vy));
+    peaks.satTime += simDt * sat / SUBSTEPS; peaks.runTime += simDt;
+    history.push({ t: state.simTime, d: kin.dL.slice() });
+    while (history.length && history[0].t < state.simTime - 5.2) history.shift();
+
+    // Stalled puck nobody can reach (dead zone at centre line, or jammed in a corner) → face-off.
+    const psp = Math.hypot(puck.vx, puck.vy);
+    if (psp < 30) state.slowTimer += simDt; else state.slowTimer = 0;
+    const deadZone = puck.x > robotXMax() + PUCK_R + MALLET_R * 0.8 && puck.x < W / 2 + MALLET_R - PUCK_R;
+    if (state.slowTimer > (deadZone ? 2 : 8)) faceOff(puck.x < W / 2 ? 'robot' : 'human');
+    wallFlash = wallFlash.filter(f => (f.t -= simDt) > 0);
+  }
+  if (state.bannerTimer > 0 && (state.bannerTimer -= realDt) <= 0) $('banner').style.opacity = 0;
+
+  drawTable();
+  drawChart();
+  uiTimer -= realDt;
+  if (uiTimer <= 0) { uiTimer = 1 / 15; updateReadout(); }
+  requestAnimationFrame(frame);
+}
+
+// ---------- Rendering: table ----------
+function resize() {
+  const r = canvas.getBoundingClientRect();
+  view.dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(r.width * view.dpr); canvas.height = Math.round(r.height * view.dpr);
+  view.sc = Math.min(r.width / (W + 2 * VIEW_M), r.height / (H + 2 * VIEW_M));
+  view.ox = (r.width - W * view.sc) / 2;
+  view.oy = (r.height - H * view.sc) / 2;
+  sizeChart();
+}
+window.addEventListener('resize', resize);
+
+const px = n => n / view.sc; // screen px → world units
+function circle(x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); }
+function drawTable() {
+  const c = ctx, d = view.dpr;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.fillStyle = '#121211'; c.fillRect(0, 0, canvas.width, canvas.height);
+  c.setTransform(d * view.sc, 0, 0, d * view.sc, d * view.ox, d * view.oy);
+
+  // Frame, rails, playfield
+  c.fillStyle = '#262624'; roundRect(-125, -125, W + 250, H + 250, 30); c.fill();
+  c.fillStyle = '#4c5866'; roundRect(-24, -24, W + 48, H + 48, 18); c.fill();
+  const g = c.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#f2f7fa'); g.addColorStop(1, '#dde8ef');
+  c.fillStyle = g; c.fillRect(0, 0, W, H);
+  c.fillStyle = 'rgba(57,135,229,0.06)'; c.fillRect(0, 0, W / 2, H);
+  c.fillStyle = 'rgba(217,89,38,0.05)'; c.fillRect(W / 2, 0, W / 2, H);
+
+  c.fillStyle = 'rgba(40,60,80,0.12)'; c.beginPath();
+  for (let x = 25; x < W; x += 50) for (let y = 25; y < H; y += 50) { c.moveTo(x + 2.2, y); c.arc(x, y, 2.2, 0, Math.PI * 2); }
+  c.fill();
+
+  c.lineWidth = 5; c.strokeStyle = 'rgba(220,60,60,0.55)';
+  c.beginPath(); c.moveTo(W / 2, 0); c.lineTo(W / 2, H); c.stroke();
+  c.strokeStyle = 'rgba(60,110,200,0.45)'; c.lineWidth = 4;
+  circle(W / 2, H / 2, 110); c.stroke();
+  c.beginPath(); c.arc(0, H / 2, 170, -Math.PI / 2, Math.PI / 2); c.stroke();
+  c.beginPath(); c.arc(W, H / 2, 170, Math.PI / 2, Math.PI * 1.5); c.stroke();
+  c.fillStyle = '#101010';
+  c.fillRect(-24, H / 2 - GOAL_W / 2, 24, GOAL_W);
+  c.fillRect(W, H / 2 - GOAL_W / 2, 24, GOAL_W);
+
+  // Side labels
+  c.font = `700 ${px(13)}px -apple-system, sans-serif`; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.fillStyle = 'rgba(57,135,229,0.55)'; c.fillText('ROBOT', W / 4, H - 24);
+  c.fillStyle = 'rgba(217,89,38,0.6)'; c.fillText('YOU', W * 0.75, H - 24);
+
+  // Robot reach envelope & defence line
+  c.setLineDash([px(6), px(5)]); c.strokeStyle = 'rgba(57,135,229,0.5)'; c.lineWidth = px(1.2);
+  c.strokeRect(MALLET_R, MALLET_R, robotXMax() - MALLET_R, H - 2 * MALLET_R);
+  c.strokeStyle = 'rgba(57,135,229,0.3)';
+  c.beginPath(); c.moveTo(P.defLine, 0); c.lineTo(P.defLine, H); c.stroke();
+  c.setLineDash([]);
+
+  for (const f of wallFlash) {
+    c.fillStyle = `rgba(217,89,38,${f.t * 2.4})`;
+    circle(f.x, f.y, 18 + (0.25 - f.t) * 120); c.fill();
+  }
+
+  // Robot's prediction and chosen shot
+  if (state.showPred) {
+    if (ai.pred) {
+      c.strokeStyle = '#b8437a'; c.lineWidth = px(2); c.setLineDash([px(7), px(5)]);
+      c.beginPath(); c.moveTo(ai.pred.segs[0].x0, ai.pred.segs[0].y0);
+      for (const s of ai.pred.segs) c.lineTo(s.x1, s.y1);
+      c.stroke(); c.setLineDash([]);
+      c.fillStyle = '#b8437a';
+      for (let i = 0; i < ai.pred.segs.length - 1; i++) { circle(ai.pred.segs[i].x1, ai.pred.segs[i].y1, px(4.5)); c.fill(); }
+    }
+    if (ai.intercept) {
+      const ip = ai.intercept, rr = PUCK_R;
+      c.strokeStyle = '#b8437a'; c.lineWidth = px(2);
+      circle(ip.x, ip.y, rr); c.stroke();
+      c.beginPath(); c.moveTo(ip.x - rr - 10, ip.y); c.lineTo(ip.x + rr + 10, ip.y);
+      c.moveTo(ip.x, ip.y - rr - 10); c.lineTo(ip.x, ip.y + rr + 10); c.stroke();
+      label(`t=${ip.t.toFixed(2)}s`, ip.x, ip.y - rr - 18, '#7a2350', 'rgba(255,255,255,0.85)');
+    }
+    if (ai.shot && P.aimMode !== 'defend') {
+      c.strokeStyle = 'rgba(57,135,229,0.8)'; c.lineWidth = px(2); c.setLineDash([px(2), px(5)]);
+      c.beginPath(); c.moveTo(ai.shot.path[0].x, ai.shot.path[0].y);
+      for (const p of ai.shot.path.slice(1)) c.lineTo(p.x, p.y);
+      c.stroke(); c.setLineDash([]);
+    }
+  }
+
+  // Robot target ghost
+  c.strokeStyle = 'rgba(57,135,229,0.45)'; c.lineWidth = px(1.5); c.setLineDash([px(4), px(4)]);
+  circle(robotTarget.x, robotTarget.y, MALLET_R); c.stroke(); c.setLineDash([]);
+
+  // Cables
+  for (let i = 0; i < 4; i++) {
+    const s = spools[i];
+    c.strokeStyle = kin.feasible ? COLORS[i] : '#e66767';
+    c.lineWidth = px(1.5 + clamp(kin.T[i] / 40, 0, 1) * 3.5);
+    c.beginPath(); c.moveTo(s.x, s.y); c.lineTo(robot.x, robot.y); c.stroke();
+  }
+
+  // Puck (ground truth)
+  c.fillStyle = 'rgba(0,0,0,0.18)'; circle(puck.x + 4, puck.y + 5, PUCK_R); c.fill();
+  c.fillStyle = '#1b1f24'; circle(puck.x, puck.y, PUCK_R); c.fill();
+  c.strokeStyle = '#4a525c'; c.lineWidth = 4; circle(puck.x, puck.y, PUCK_R - 7); c.stroke();
+
+  // Vision: delayed raw observations + robot's belief of the puck
+  if (state.showVision) {
+    c.fillStyle = 'rgba(140,60,200,0.55)';
+    for (const o of cam.trail) { circle(o.x, o.y, px(2.5)); c.fill(); }
+    if (cam.est) {
+      c.strokeStyle = '#8c3cc8'; c.lineWidth = px(2); c.setLineDash([px(3), px(3)]);
+      circle(cam.est.x, cam.est.y, PUCK_R + 4); c.stroke(); c.setLineDash([]);
+    }
+  }
+
+  drawMallet(robot, '#5d6c7e', '#2c3642', state.aiOn ? '#3987e5' : '#8d8c83');
+  drawMallet(human, '#e0775a', '#9c3a22', '#ffd2c2');
+
+  arrow(puck.x, puck.y, puck.x + puck.vx * 0.1, puck.y + puck.vy * 0.1, '#d95926', 3);
+  arrow(robot.x, robot.y, robot.x + robot.vx * 0.1, robot.y + robot.vy * 0.1, '#2c3642', 2);
+
+  for (let i = 0; i < 4; i++) drawSpool(i);
+  for (let i = 0; i < 4; i++) {
+    const s = spools[i];
+    label(`${SPOOL_NAMES[i]} ${kin.L[i].toFixed(0)} mm`, s.x + (robot.x - s.x) * 0.5, s.y + (robot.y - s.y) * 0.5,
+      '#1a1a19', 'rgba(255,255,255,0.88)', COLORS[i]);
+  }
+  if (robot.sat) label('SERVO SPEED LIMIT', robot.x, robot.y + MALLET_R + 18, '#ffffff', 'rgba(200,60,60,0.9)');
+}
+function drawMallet(m, c0, c1, ring) {
+  const c = ctx;
+  c.fillStyle = 'rgba(0,0,0,0.2)'; circle(m.x + 5, m.y + 6, MALLET_R); c.fill();
+  const mg = c.createRadialGradient(m.x - 12, m.y - 12, 5, m.x, m.y, MALLET_R);
+  mg.addColorStop(0, c0); mg.addColorStop(1, c1);
+  c.fillStyle = mg; circle(m.x, m.y, MALLET_R); c.fill();
+  c.strokeStyle = ring; c.lineWidth = 5; circle(m.x, m.y, MALLET_R - 3); c.stroke();
+  c.fillStyle = '#f5f5f5'; circle(m.x, m.y, 9); c.fill();
+}
+function drawSpool(i) {
+  const c = ctx, s = spools[i], r = SPOOL_DRAW_R;
+  c.fillStyle = '#1a1a19'; circle(s.x, s.y, r + 8); c.fill();
+  c.strokeStyle = COLORS[i]; c.lineWidth = 7; circle(s.x, s.y, r - 2); c.stroke();
+  c.fillStyle = '#3b3b38'; circle(s.x, s.y, r - 6); c.fill();
+  c.strokeStyle = '#c3c2b7'; c.lineWidth = 3;
+  for (let k = 0; k < 3; k++) {
+    const a = kin.ang[i] + k * Math.PI * 2 / 3;
+    c.beginPath(); c.moveTo(s.x, s.y); c.lineTo(s.x + Math.cos(a) * (r - 8), s.y + Math.sin(a) * (r - 8)); c.stroke();
+  }
+  c.fillStyle = '#fff'; circle(s.x, s.y, 5); c.fill();
+  c.font = `600 ${px(12)}px -apple-system, sans-serif`; c.fillStyle = '#c3c2b7';
+  c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.fillText(`M${i + 1}`, s.x, s.y + (s.y < 0 ? -r - 22 : r + 22));
+}
+function roundRect(x, y, w, h, r) {
+  const c = ctx; c.beginPath();
+  c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+}
+function arrow(x0, y0, x1, y1, color, w) {
+  const c = ctx, dx = x1 - x0, dy = y1 - y0, L = Math.hypot(dx, dy);
+  if (L < 8) return;
+  const hx = dx / L, hy = dy / L, hs = Math.min(18, L * 0.4);
+  c.strokeStyle = color; c.fillStyle = color; c.lineWidth = px(w);
+  c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1 - hx * hs * 0.6, y1 - hy * hs * 0.6); c.stroke();
+  c.beginPath(); c.moveTo(x1, y1);
+  c.lineTo(x1 - hx * hs - hy * hs * 0.5, y1 - hy * hs + hx * hs * 0.5);
+  c.lineTo(x1 - hx * hs + hy * hs * 0.5, y1 - hy * hs - hx * hs * 0.5);
+  c.closePath(); c.fill();
+}
+function label(text, x, y, ink, bg, chip) {
+  const c = ctx;
+  c.font = `500 ${px(11)}px ui-monospace, Menlo, monospace`;
+  c.textAlign = 'left'; c.textBaseline = 'middle';
+  const tw = c.measureText(text).width, pad = px(5), ch = chip ? px(10) : 0, hgt = px(17);
+  const bx = x - (tw + ch) / 2 - pad, by = y - hgt / 2;
+  c.fillStyle = bg; roundRect(bx, by, tw + ch + pad * 2, hgt, px(4)); c.fill();
+  if (chip) { c.fillStyle = chip; c.fillRect(bx + pad, y - px(3), px(6), px(6)); }
+  c.fillStyle = ink; c.fillText(text, bx + pad + ch, y + px(0.5));
+}
+
+// ---------- Readout / sidebar numbers ----------
+const f0 = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(0);
+const pad = (s, n) => String(s).padStart(n);
+const rpm = v => Math.abs(v) / (Math.PI * P.spoolD) * 60;
+function updateReadout() {
+  const sp = Math.hypot(puck.vx, puck.vy);
+  const ang = (Math.atan2(-puck.vy, puck.vx) * 180 / Math.PI + 360) % 360;
+  const rsp = Math.hypot(robot.vx, robot.vy), racc = Math.hypot(robot.ax, robot.ay);
+  let s = `<span class="h">PUCK (truth)</span>\n`;
+  s += `  v⃗ = (<b>${pad(f0(puck.vx), 6)}</b>, <b>${pad(f0(-puck.vy), 6)}</b>) mm/s   |v| <b>${pad(sp.toFixed(0), 5)}</b>  ∠${pad(ang.toFixed(0), 4)}°\n`;
+  s += `<span class="h">VISION</span>  ${P.camFps} fps · ${P.latency} ms · σ ${P.noise} mm${P.latComp ? ' · comp' : ''}\n`;
+  s += cam.est ? `  est. error  pos <b>${pad(cam.err.toFixed(1), 5)}</b> mm   vel <b>${pad(cam.verr.toFixed(0), 5)}</b> mm/s\n` : `  no track\n`;
+  s += `<span class="h">ROBOT</span>  <b>${ai.state}</b>${ai.shot && P.aimMode !== 'defend' ? ' → ' + ai.shot.name : ''}\n`;
+  s += `  |v| <b>${pad(rsp.toFixed(0), 5)}</b> mm/s  |a| <b>${pad((racc / 1000).toFixed(1), 5)}</b> m/s²  ${robot.sat ? '<span style="color:#e66767">SERVO LIMIT</span>' : ''}\n`;
+  s += `<span class="h">SPOOL    L mm   ΔL/Δt mm/s    RPM   T N</span>\n`;
+  for (let i = 0; i < 4; i++) {
+    s += `  <span style="color:${COLORS[i]}">■</span> ${SPOOL_NAMES[i]} ${pad(kin.L[i].toFixed(0), 6)}  <b>${pad(f0(kin.dL[i]), 9)}</b>  ${pad(rpm(kin.dL[i]).toFixed(0), 6)} ${pad(kin.T[i].toFixed(1), 5)}\n`;
+  }
+  if (!kin.feasible) s += `  <span style="color:#e66767">⚠ tension infeasible (cable would go slack)</span>\n`;
+  s += `<span class="h">hits: robot ${state.hits.robot} · you ${state.hits.human} · ${state.paused ? 'PAUSED' : P.timeScale.toFixed(2) + '× speed'}</span>`;
+  $('readout').innerHTML = s;
+  $('score').innerHTML = `<b style="color:#8fb8ef">ROBOT ${state.score.robot}</b><span>first to ${WIN_SCORE}</span><b style="color:#ffb199">${state.score.human} YOU</b>`;
+
+  let rows = '';
+  for (let i = 0; i < 4; i++) {
+    const torque = peaks.T[i] * (P.spoolD / 2) / 10; // N·mm → N·cm
+    const atLimit = peaks.dL[i] >= lineLimit() * 0.98;
+    rows += `<tr><td>${swatch(i)}${SPOOL_NAMES[i]}</td><td>${peaks.dL[i].toFixed(0)}${atLimit ? '*' : ''}</td><td>${rpm(peaks.dL[i]).toFixed(0)}</td>` +
+      `<td>${peaks.T[i].toFixed(1)}</td><td>${torque.toFixed(1)}</td></tr>`;
+  }
+  $('peakBody').innerHTML = rows;
+  const satPct = peaks.runTime > 0 ? peaks.satTime / peaks.runTime * 100 : 0;
+  $('peakExtra').innerHTML =
+    `Servo line-speed limit: <b>${lineLimit().toFixed(0)} mm/s</b> (${P.servoRPM} RPM · π · ${P.spoolD} mm). ` +
+    `Time at limit: <b>${satPct.toFixed(1)}%</b>${satPct > 0 ? ' (* = saturated)' : ''}.<br>` +
+    `Peak carriage ${peaks.v.toFixed(0)} mm/s, ${(peaks.a / 1000).toFixed(1)} m/s² · peak puck ${peaks.puckV.toFixed(0)} mm/s.<br>` +
+    `Torque = T·D/2, inertial load only (excludes friction, drum inertia and impact).`;
+}
+
+// ---------- ΔL/Δt strip chart ----------
+const chart = $('chart'), cctx = chart.getContext('2d');
+let chartHover = null;
+function sizeChart() {
+  const r = chart.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+  chart.width = Math.round(r.width * d); chart.height = Math.round(r.height * d);
+}
+chart.addEventListener('mousemove', e => { chartHover = e.clientX - chart.getBoundingClientRect().left; });
+chart.addEventListener('mouseleave', () => { chartHover = null; });
+function niceCeil(v) {
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+  return 10 * p;
+}
+function drawChart() {
+  const d = window.devicePixelRatio || 1, w = chart.width / d, h = chart.height / d, c = cctx;
+  c.setTransform(d, 0, 0, d, 0, 0);
+  c.fillStyle = '#1a1a19'; c.fillRect(0, 0, w, h);
+  const padL = 40, padR = 24, padT = 8, padB = 18, span = 5;
+  const t1 = state.simTime, t0 = t1 - span, ll = lineLimit();
+  let m = 0;
+  for (const s of history) for (const v of s.d) m = Math.max(m, Math.abs(v));
+  const ymax = niceCeil(Math.max(m, Math.min(ll * 1.05, 20000), 100));
+  const X = t => padL + (t - t0) / span * (w - padL - padR);
+  const Y = v => padT + (1 - (v + ymax) / (2 * ymax)) * (h - padT - padB);
+
+  c.font = '10px ui-monospace, Menlo, monospace'; c.textBaseline = 'middle';
+  for (const v of [-ymax, -ymax / 2, 0, ymax / 2, ymax]) {
+    c.strokeStyle = v === 0 ? '#55544e' : '#2c2b28'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(padL, Math.round(Y(v)) + 0.5); c.lineTo(w - padR, Math.round(Y(v)) + 0.5); c.stroke();
+    c.fillStyle = '#8d8c83'; c.textAlign = 'right';
+    c.fillText(Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + 'k' : v.toFixed(0), padL - 5, Y(v));
+  }
+  if (ll < ymax) {
+    c.strokeStyle = '#8d8c83'; c.setLineDash([4, 4]);
+    for (const v of [ll, -ll]) { c.beginPath(); c.moveTo(padL, Y(v)); c.lineTo(w - padR, Y(v)); c.stroke(); }
+    c.setLineDash([]);
+  }
+  c.fillStyle = '#8d8c83';
+  c.textAlign = 'left'; c.fillText('−5 s', padL, h - 7);
+  c.textAlign = 'right'; c.fillText('now', w - padR, h - 7);
+
+  const pts = history.filter(s => s.t >= t0);
+  if (pts.length < 2) return;
+  c.lineWidth = 2; c.lineJoin = 'round'; c.lineCap = 'round';
+  for (let i = 0; i < 4; i++) {
+    c.strokeStyle = COLORS[i]; c.setLineDash(DASH[i]);
+    c.beginPath();
+    pts.forEach((s, k) => k ? c.lineTo(X(s.t), Y(s.d[i])) : c.moveTo(X(s.t), Y(s.d[i])));
+    c.stroke();
+  }
+  c.setLineDash([]);
+  const last = pts[pts.length - 1];
+  const labs = [0, 1, 2, 3].map(i => ({ i, y: Y(last.d[i]) })).sort((a, b) => a.y - b.y);
+  for (let k = 1; k < labs.length; k++) if (labs[k].y - labs[k - 1].y < 11) labs[k].y = labs[k - 1].y + 11;
+  c.fillStyle = '#c3c2b7'; c.textAlign = 'left';
+  for (const l of labs) c.fillText(SPOOL_NAMES[l.i], w - padR + 3, clamp(l.y, 6, h - 6));
+
+  if (chartHover !== null && chartHover >= padL && chartHover <= w - padR) {
+    const th = t0 + (chartHover - padL) / (w - padL - padR) * span;
+    let best = pts[0];
+    for (const s of pts) if (Math.abs(s.t - th) < Math.abs(best.t - th)) best = s;
+    const hx = X(best.t);
+    c.strokeStyle = '#8d8c83'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(hx + 0.5, padT); c.lineTo(hx + 0.5, h - padB); c.stroke();
+    for (let i = 0; i < 4; i++) {
+      c.fillStyle = COLORS[i]; c.strokeStyle = '#1a1a19'; c.lineWidth = 2;
+      c.beginPath(); c.arc(hx, Y(best.d[i]), 4, 0, Math.PI * 2); c.fill(); c.stroke();
+    }
+    const bw = 118, bh = 76, bx = hx + 10 + bw > w ? hx - 10 - bw : hx + 10, by = padT + 2;
+    c.fillStyle = 'rgba(35,35,33,0.96)'; c.strokeStyle = '#34332f'; c.lineWidth = 1;
+    c.beginPath(); c.rect(bx, by, bw, bh); c.fill(); c.stroke();
+    c.textAlign = 'left'; c.fillStyle = '#8d8c83';
+    c.fillText(`${(best.t - t1).toFixed(2)} s · mm/s`, bx + 8, by + 11);
+    for (let i = 0; i < 4; i++) {
+      const yy = by + 26 + i * 14;
+      c.strokeStyle = COLORS[i]; c.lineWidth = 2; c.setLineDash(DASH[i].map(v => v * 0.6));
+      c.beginPath(); c.moveTo(bx + 8, yy); c.lineTo(bx + 22, yy); c.stroke(); c.setLineDash([]);
+      c.fillStyle = '#c3c2b7'; c.fillText(SPOOL_NAMES[i], bx + 28, yy);
+      c.fillStyle = '#ffffff'; c.textAlign = 'right'; c.fillText(f0(best.d[i]), bx + bw - 8, yy); c.textAlign = 'left';
+    }
+  }
+}
+
+// ---------- Start ----------
+resize();
+updateKinematics(0);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

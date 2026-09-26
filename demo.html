@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#121211">
+<title>Robot Air Hockey</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #121211; color: #fff; overflow: hidden;
+    position: fixed; inset: 0; overscroll-behavior: none; touch-action: none;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  #table { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #probe { position: fixed; visibility: hidden; pointer-events: none;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  #hud { position: fixed; left: 0; right: 0; top: 0; display: flex; justify-content: space-between; align-items: center;
+    padding: calc(env(safe-area-inset-top) + 6px) 12px 6px; pointer-events: none; }
+  #hud button { pointer-events: auto; }
+  .icon { width: 40px; height: 40px; border-radius: 20px; border: 1px solid #34332f; background: rgba(35,35,33,.9);
+    color: #fff; font-size: 17px; display: grid; place-items: center; padding: 0; }
+  .icon.off { opacity: .45; }
+  #brainText { font: 600 11px ui-monospace, Menlo, monospace; color: #c3c2b7; background: rgba(35,35,33,.9);
+    border: 1px solid #34332f; border-radius: 12px; padding: 4px 10px; letter-spacing: .04em; }
+  #banner { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%); font-size: 34px; font-weight: 800;
+    text-shadow: 0 2px 14px rgba(0,0,0,.7); pointer-events: none; opacity: 0; transition: opacity .25s; white-space: nowrap; }
+  #menu { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(10,10,10,.55);
+    -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+  #menu.hidden { display: none; }
+  .card { width: min(340px, 88vw); background: #1a1a19; border: 1px solid #34332f; border-radius: 18px; padding: 22px 20px;
+    text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+  .card h1 { margin: 0 0 4px; font-size: 24px; }
+  .card p { margin: 0 0 16px; color: #c3c2b7; font-size: 14px; }
+  .card .small { color: #8d8c83; font-size: 12.5px; margin: 14px 0 0; }
+  .seg { display: flex; background: #232321; border: 1px solid #34332f; border-radius: 12px; padding: 3px; margin-bottom: 16px; }
+  .seg button { flex: 1; border: 0; background: transparent; color: #c3c2b7; padding: 10px 0; border-radius: 9px; font: 600 14px -apple-system, sans-serif; }
+  .seg button.on { background: #3987e5; color: #fff; }
+  .big { width: 100%; border: 0; border-radius: 12px; padding: 14px; font: 700 17px -apple-system, sans-serif;
+    background: #d95926; color: #fff; }
+  .ghost { width: 100%; margin-top: 8px; border: 1px solid #34332f; border-radius: 12px; padding: 12px; font: 600 15px -apple-system, sans-serif;
+    font-family: inherit; background: transparent; color: #c3c2b7; }
+</style>
+</head>
+<body>
+<canvas id="table"></canvas>
+<div id="probe"></div>
+<div id="hud">
+  <button class="icon" id="brainBtn" title="Show robot's brain">🧠</button>
+  <span id="brainText"></span>
+  <div style="display:flex; gap:8px">
+    <button class="icon" id="soundBtn" title="Sound">🔊</button>
+    <button class="icon" id="pauseBtn" title="Pause">⏸</button>
+  </div>
+</div>
+<div id="banner"></div>
+<div id="menu">
+  <div class="card">
+    <h1 id="menuTitle">Robot Air Hockey</h1>
+    <p id="menuSub">You vs a robot driven by 4 cable servos.<br>First to 7 wins.</p>
+    <div class="seg" id="diff">
+      <button data-d="easy">Easy</button><button data-d="normal" class="on">Normal</button><button data-d="hard">Hard</button>
+    </div>
+    <button class="big" id="playBtn">Play</button>
+    <button class="ghost hidden" id="restartBtn" style="display:none">Restart match</button>
+    <div class="small">Drag your finger on the bottom half to move your mallet.<br>🧠 shows what the robot is thinking.</div>
+  </div>
+</div>
+
+<script>
+'use strict';
+// ---------- Geometry (world mm; robot defends x = 0, human defends x = W) ----------
+const W = 1600, H = 900;
+const PUCK_R = 32, MALLET_R = 48, GOAL_W = 260;
+const SPOOL_OFF = 70, SPOOL_DRAW_R = 34, VIEW_M = 122;
+const SUBSTEPS = 10, MAX_PUCK_SPEED = 12000, WIN_SCORE = 7;
+const FINGER_OFFSET = 36; // css px: mallet sits just above the fingertip so it stays visible
+const COLORS = ['#3987e5', '#d95926', '#199e70', '#c98500'];
+const spools = [
+  { x: -SPOOL_OFF, y: -SPOOL_OFF }, { x: W / 2, y: -SPOOL_OFF },
+  { x: W / 2, y: H + SPOOL_OFF }, { x: -SPOOL_OFF, y: H + SPOOL_OFF },
+];
+
+// ---------- Tunables & difficulty ----------
+const P = {
+  drag: 0.15, friction: 60, elasticity: 0.85, restitution: 0.9,
+  humanMax: 6000, humanAcc: 90000,
+  servoRPM: 1200, spoolD: 40, pusherMax: 3500, pusherAcc: 25000,
+  camFps: 120, latency: 40, noise: 2, alpha: 0.6,
+  windup: 70, defLine: 90, reactMargin: 30,
+};
+const DIFF = {
+  easy:   { servoRPM: 650,  pusherAcc: 12000, latency: 90, noise: 4,   reactMargin: 70 },
+  normal: { servoRPM: 1200, pusherAcc: 25000, latency: 40, noise: 2,   reactMargin: 30 },
+  hard:   { servoRPM: 2200, pusherAcc: 45000, latency: 15, noise: 1,   reactMargin: 10 },
+};
+
+// ---------- State ----------
+const state = { paused: true, started: false, brain: true, sound: true, diff: 'normal',
+  score: { robot: 0, human: 0 }, simTime: 0, slowTimer: 0, bannerTimer: 0 };
+const puck = { x: W * 0.75, y: H / 2, vx: 0, vy: 0 };
+const robot = { x: 150, y: H / 2, vx: 0, vy: 0 };
+const human = { x: W - 150, y: H / 2, vx: 0, vy: 0 };
+const robotTarget = { x: 150, y: H / 2 };
+const humanTarget = { x: W - 150, y: H / 2 };
+const kin = { L: [0, 0, 0, 0], Lprev: null, ang: [0, 0, 0, 0] };
+const cam = { timer: 0, queue: [], f: null, est: null };
+const ai = { state: 'HOME', pred: null, intercept: null, shot: null, commit: null };
+let wallFlash = [];
+
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const $ = id => document.getElementById(id);
+const lineLimit = () => P.servoRPM / 60 * Math.PI * P.spoolD;
+const robotXMax = () => W / 2 - MALLET_R - 10;
+const clampRobot = p => ({ x: clamp(p.x, MALLET_R, robotXMax()), y: clamp(p.y, MALLET_R, H - MALLET_R) });
+const clampHuman = p => ({ x: clamp(p.x, W / 2 + MALLET_R, W - MALLET_R), y: clamp(p.y, MALLET_R, H - MALLET_R) });
+function gauss() { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+
+// ---------- Sound ----------
+let actx = null, lastWallSound = 0;
+function unlockAudio() {
+  if (!actx) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) actx = new AC(); }
+  if (actx && actx.state === 'suspended') actx.resume();
+}
+function tone(freq, dur, vol, type = 'triangle', delay = 0) {
+  if (!actx || !state.sound) return;
+  const t = actx.currentTime + delay, o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + dur + 0.02);
+}
+const sHit = speed => tone(520 + Math.min(speed, 6000) / 20, 0.07, clamp(speed / 5000, 0.08, 0.35), 'square');
+const sWall = speed => { if (state.simTime - lastWallSound > 0.04) { lastWallSound = state.simTime; tone(300, 0.05, clamp(speed / 8000, 0.04, 0.18)); } };
+const sGoal = good => { const b = good ? [523, 659, 784] : [392, 330, 262]; b.forEach((f, i) => tone(f, 0.18, 0.25, 'triangle', i * 0.11)); };
+
+// ---------- Menu / HUD ----------
+function applyDiff(d) {
+  state.diff = d; Object.assign(P, DIFF[d]);
+  for (const b of $('diff').children) b.classList.toggle('on', b.dataset.d === d);
+}
+for (const b of $('diff').children) b.onclick = () => applyDiff(b.dataset.d);
+function showMenu(title, sub, playLabel, showRestart) {
+  $('menuTitle').textContent = title; $('menuSub').innerHTML = sub; $('playBtn').textContent = playLabel;
+  $('restartBtn').style.display = showRestart ? '' : 'none';
+  $('menu').classList.remove('hidden'); state.paused = true;
+}
+function hideMenu() { $('menu').classList.add('hidden'); state.paused = false; }
+$('playBtn').onclick = () => {
+  unlockAudio();
+  if (!state.started || state.score.robot >= WIN_SCORE || state.score.human >= WIN_SCORE) newMatch();
+  state.started = true; hideMenu();
+};
+$('restartBtn').onclick = () => { unlockAudio(); newMatch(); state.started = true; hideMenu(); };
+$('pauseBtn').onclick = () => { if (state.started && !state.paused) showMenu('Paused', `Robot ${state.score.robot} – ${state.score.human} You`, 'Resume', true); };
+$('brainBtn').onclick = () => { state.brain = !state.brain; $('brainBtn').classList.toggle('off', !state.brain); };
+$('soundBtn').onclick = () => { state.sound = !state.sound; $('soundBtn').textContent = state.sound ? '🔊' : '🔇'; unlockAudio(); };
+document.addEventListener('visibilitychange', () => { if (document.hidden) $('pauseBtn').onclick(); });
+document.addEventListener('gesturestart', e => e.preventDefault());
+document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+
+// ---------- View: world → portrait screen (rotated 90°, robot at top) ----------
+const canvas = $('table'), ctx = canvas.getContext('2d');
+const bg = document.createElement('canvas'), bctx = bg.getContext('2d');
+const view = { sc: 1, ox: 0, oy: 0, dpr: 1 };
+const toScreen = (x, y) => ({ x: view.ox + (H - y) * view.sc, y: view.oy + x * view.sc });
+const toWorld = (sx, sy) => ({ x: (sy - view.oy) / view.sc, y: H - (sx - view.ox) / view.sc });
+function worldTransform(c) { const d = view.dpr, s = view.sc; c.setTransform(0, d * s, -d * s, 0, d * (view.ox + H * s), d * view.oy); }
+function screenTransform(c) { c.setTransform(view.dpr, 0, 0, view.dpr, 0, 0); }
+
+function onPointer(e) {
+  if (state.paused) return;
+  const r = canvas.getBoundingClientRect();
+  const off = e.pointerType === 'mouse' ? 0 : FINGER_OFFSET;
+  const p = toWorld(e.clientX - r.left, e.clientY - r.top - off);
+  humanTarget.x = p.x; humanTarget.y = p.y;
+}
+canvas.addEventListener('pointerdown', e => { e.preventDefault(); unlockAudio(); onPointer(e); });
+canvas.addEventListener('pointermove', e => { e.preventDefault(); onPointer(e); });
+
+function resize() {
+  const iw = window.innerWidth, ih = window.innerHeight, cs = getComputedStyle($('probe'));
+  const top = parseFloat(cs.paddingTop) + 52, bottom = parseFloat(cs.paddingBottom) + 10;
+  view.dpr = Math.min(window.devicePixelRatio || 1, 3);
+  canvas.width = bg.width = Math.round(iw * view.dpr); canvas.height = bg.height = Math.round(ih * view.dpr);
+  const ah = ih - top - bottom;
+  view.sc = Math.min(iw / (H + 2 * VIEW_M), ah / (W + 2 * VIEW_M));
+  view.ox = (iw - H * view.sc) / 2;
+  view.oy = top + (ah - W * view.sc) / 2;
+  renderStatic();
+}
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 200));
+
+// ---------- Match flow ----------
+function faceOff(side) {
+  puck.x = side === 'robot' ? W * 0.25 : W * 0.75;
+  puck.y = H / 2 + (Math.random() - 0.5) * 200;
+  puck.vx = puck.vy = 0;
+  state.slowTimer = 0; ai.commit = null; cam.f = null; cam.queue.length = 0;
+}
+function newMatch() {
+  state.score.robot = state.score.human = 0;
+  robot.x = robotTarget.x = 150; robot.y = robotTarget.y = H / 2; robot.vx = robot.vy = 0;
+  human.x = humanTarget.x = W - 150; human.y = humanTarget.y = H / 2; human.vx = human.vy = 0;
+  kin.Lprev = null;
+  faceOff('human');
+}
+function banner(text, color, t) {
+  const b = $('banner'); b.textContent = text; b.style.color = color; b.style.opacity = 1; state.bannerTimer = t;
+}
+function goal(robotScored) {
+  if (robotScored) state.score.robot++; else state.score.human++;
+  sGoal(!robotScored);
+  if (state.score.robot >= WIN_SCORE || state.score.human >= WIN_SCORE) {
+    const won = state.score.human > state.score.robot;
+    showMenu(won ? 'You win! 🏆' : 'Robot wins 🤖', `Final score: You ${state.score.human} – ${state.score.robot} Robot`, 'Play again', false);
+    faceOff('human');
+    return;
+  }
+  banner(robotScored ? 'ROBOT SCORES' : 'GOAL!', robotScored ? '#8fb8ef' : '#ffb199', 1.1);
+  faceOff(robotScored ? 'human' : 'robot');
+}
+
+// ---------- Puck motion model (shared by sim and predictor) ----------
+// dv/dt = -k·v - f   (k = air drag, f = constant surface friction). Returns time/speed after distance s.
+function travel(v0, s) {
+  const k = P.drag, f = P.friction;
+  if (v0 <= 1e-6) return { reached: s <= 0, t: 0, s: 0, v: 0 };
+  if (k < 1e-6) {
+    if (f < 1e-6) return { reached: true, t: s / v0, s, v: v0 };
+    const ts = v0 / f, smax = v0 * ts / 2;
+    if (s >= smax) return { reached: false, t: ts, s: smax, v: 0 };
+    const t = (v0 - Math.sqrt(v0 * v0 - 2 * f * s)) / f;
+    return { reached: true, t, s, v: v0 - f * t };
+  }
+  const c = v0 + f / k;
+  const D = t => c * (1 - Math.exp(-k * t)) / k - f * t / k;
+  const V = t => c * Math.exp(-k * t) - f / k;
+  if (f < 1e-6) {
+    const smax = v0 / k;
+    if (s >= smax) return { reached: false, t: Infinity, s: smax, v: 0 };
+    const t = -Math.log(1 - k * s / v0) / k;
+    return { reached: true, t, s, v: V(t) };
+  }
+  const ts = Math.log(k * c / f) / k, smax = D(ts);
+  if (s >= smax) return { reached: false, t: ts, s: smax, v: 0 };
+  let lo = 0, hi = ts;
+  for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; if (D(m) < s) lo = m; else hi = m; }
+  return { reached: true, t: hi, s, v: V(hi) };
+}
+// Wall-bounce reflection predictor (vy reflected and scaled by elasticity at each side-wall hit).
+function predictPath(px, py, vx, vy, xEnd) {
+  const r = PUCK_R;
+  let speed = Math.hypot(vx, vy);
+  if (vx >= -1 || speed < 1 || px <= xEnd) return null;
+  let x = px, y = clamp(py, r, H - r), dx = vx / speed, dy = vy / speed, t = 0;
+  const segs = [];
+  for (let b = 0; b < 14; b++) {
+    const sx = (xEnd - x) / dx;
+    let sy = Infinity;
+    if (dy < -1e-9) sy = (r - y) / dy; else if (dy > 1e-9) sy = (H - r - y) / dy;
+    const hitWall = sy < sx;
+    const s = Math.max(0, hitWall ? sy : sx);
+    const tr = travel(speed, s);
+    const seg = { x0: x, y0: y, dx, dy, t0: t, v0: speed };
+    if (!tr.reached) {
+      seg.x1 = x + dx * tr.s; seg.y1 = y + dy * tr.s; seg.t1 = t + tr.t;
+      segs.push(seg);
+      return { segs, stopped: true };
+    }
+    x += dx * s; y += dy * s; t += tr.t; speed = tr.v;
+    seg.x1 = x; seg.y1 = y; seg.t1 = t;
+    segs.push(seg);
+    if (!hitWall) return { segs, stopped: false };
+    const ndy = -dy * P.elasticity, m = Math.hypot(dx, ndy);
+    speed *= m; dx /= m; dy = ndy / m;
+    if (speed < 1) return { segs, stopped: true };
+  }
+  return { segs, stopped: true };
+}
+function pointAtX(pred, xl) {
+  for (const s of pred.segs) {
+    if (s.x0 >= xl && s.x1 <= xl) {
+      const d = (xl - s.x0) / s.dx, tr = travel(s.v0, d);
+      return { x: xl, y: s.y0 + s.dy * d, t: s.t0 + tr.t, vx: s.dx * tr.v, vy: s.dy * tr.v };
+    }
+  }
+  return null;
+}
+
+// ---------- Vision: camera sampling + alpha-beta tracker ----------
+function reflectY(y, vy) {
+  const r = PUCK_R;
+  if (y < r) return [2 * r - y, -vy * P.elasticity];
+  if (y > H - r) return [2 * (H - r) - y, -vy * P.elasticity];
+  return [y, vy];
+}
+function trackerUpdate(o) {
+  const f = cam.f;
+  if (!f) { cam.f = { x: o.x, y: o.y, vx: 0, vy: 0, t: o.t, last: o, fresh: true }; return; }
+  const dt = o.t - f.t;
+  if (dt <= 0) return;
+  const xp = f.x + f.vx * dt, [yp, vyp] = reflectY(f.y + f.vy * dt, f.vy);
+  const rx = o.x - xp, ry = o.y - yp, gate = 4 * P.noise + 15;
+  if (f.fresh || Math.hypot(rx, ry) > gate) {
+    f.vx = (o.x - f.last.x) / (o.t - f.last.t); f.vy = (o.y - f.last.y) / (o.t - f.last.t);
+    f.x = o.x; f.y = o.y; f.fresh = Math.hypot(rx, ry) > gate && !f.fresh;
+  } else {
+    const a = P.alpha, b = a * a / (2 - a);
+    f.x = xp + a * rx; f.y = yp + a * ry;
+    f.vx += b * rx / dt; f.vy = vyp + b * ry / dt;
+  }
+  f.t = o.t; f.last = o;
+}
+function updateVision(dt) {
+  cam.timer += dt;
+  const period = 1 / P.camFps;
+  while (cam.timer >= period) {
+    cam.timer -= period;
+    cam.queue.push({ t: state.simTime, x: puck.x + gauss() * P.noise, y: puck.y + gauss() * P.noise });
+  }
+  const lat = P.latency / 1000;
+  while (cam.queue.length && cam.queue[0].t + lat <= state.simTime) trackerUpdate(cam.queue.shift());
+}
+function computeEstimate() {
+  const f = cam.f;
+  if (!f) { cam.est = null; return; }
+  const dt = state.simTime - f.t, sp = Math.hypot(f.vx, f.vy);
+  const tr = travel(sp, sp * dt);
+  const s = tr.reached ? sp * dt : tr.s, k = sp > 1e-6 ? (tr.reached ? tr.v : 0) / sp : 0;
+  const x = f.x + (sp > 1e-6 ? f.vx / sp * s : 0);
+  const [y, vy] = reflectY(f.y + (sp > 1e-6 ? f.vy / sp * s : 0), f.vy * k);
+  cam.est = { x, y, vx: f.vx * k, vy };
+}
+
+// ---------- Robot AI ----------
+const effMax = () => Math.min(P.pusherMax, lineLimit());
+function timeToReach(p) {
+  const d = Math.hypot(p.x - robot.x, p.y - robot.y);
+  const vmax = effMax(), amax = P.pusherAcc, dAcc = vmax * vmax / amax;
+  return d < dAcc ? 2 * Math.sqrt(d / amax) : d / vmax + vmax / amax;
+}
+function lungeTime(d) {
+  const vmax = effMax(), amax = P.pusherAcc, dA = vmax * vmax / (2 * amax);
+  return d < dA ? Math.sqrt(2 * d / amax) : vmax / amax + (d - dA) / vmax;
+}
+const strikeSpeed = () => Math.min(effMax(), Math.sqrt(2 * P.pusherAcc * P.windup));
+function distToPath(p, path) {
+  let best = Infinity;
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i], b = path[i + 1], dx = b.x - a.x, dy = b.y - a.y;
+    const t = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1), 0, 1);
+    best = Math.min(best, Math.hypot(p.x - a.x - dx * t, p.y - a.y - dy * t));
+  }
+  return best;
+}
+// Direct or elasticity-aware bank shot, whichever lane is farthest from the human mallet.
+function chooseShot(p) {
+  const r = PUCK_R, e = P.elasticity, gy = H / 2, D = W - p.x;
+  const dd = Math.hypot(D, gy - p.y);
+  const opts = [{ name: 'DIRECT', g: { x: D / dd, y: (gy - p.y) / dd }, path: [p, { x: W, y: gy }] }];
+  if (e > 0.05) {
+    for (const top of [true, false]) {
+      const a = top ? p.y - r : H - r - p.y, b = top ? gy - r : H - r - gy;
+      if (a <= 0) continue;
+      const k = (b + e * a) / (e * D), xb = p.x + a / k;
+      if (xb >= W - 20) continue;
+      const m = Math.hypot(1, k);
+      opts.push({ name: 'BANK SHOT', g: { x: 1 / m, y: (top ? -k : k) / m }, path: [p, { x: xb, y: top ? r : H - r }, { x: W, y: gy }] });
+    }
+  }
+  let best = opts[0], bestScore = -Infinity;
+  for (const o of opts) {
+    const sc = distToPath(human, o.path) + (o.name === 'DIRECT' ? 40 : 0);
+    if (sc > bestScore) { bestScore = sc; best = o; }
+  }
+  return best;
+}
+// Contact normal so a mallet moving along n at speed s sends a puck with velocity v along g.
+function solveNormal(vx, vy, g, s) {
+  const e = P.restitution;
+  let best = g, bestErr = Infinity;
+  for (let deg = -70; deg <= 70; deg += 2) {
+    const a = deg * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a);
+    const n = { x: g.x * c - g.y * sn, y: g.x * sn + g.y * c };
+    const rvn = (vx - n.x * s) * n.x + (vy - n.y * s) * n.y;
+    if (rvn >= 0) continue;
+    const ox = vx - (1 + e) * rvn * n.x, oy = vy - (1 + e) * rvn * n.y, om = Math.hypot(ox, oy);
+    if (om < 1) continue;
+    const err = 1 - (ox * g.x + oy * g.y) / om;
+    if (err < bestErr) { bestErr = err; best = n; }
+  }
+  return best;
+}
+function setRobotTarget(p) { const c = clampRobot(p); robotTarget.x = c.x; robotTarget.y = c.y; }
+function inReach(p) { return p.x >= MALLET_R - 1 && p.x <= robotXMax() + 1 && p.y >= MALLET_R - 1 && p.y <= H - MALLET_R + 1; }
+
+function aiUpdate() {
+  const R = PUCK_R + MALLET_R, xDef = P.defLine, est = cam.est;
+  ai.pred = null; ai.intercept = null; ai.shot = null;
+  const home = () => ({ x: xDef + 40, y: H / 2 + ((est ? est.y : H / 2) - H / 2) * 0.3 });
+  if (!est) { ai.state = 'WATCHING'; setRobotTarget(home()); return; }
+  if (ai.commit) {
+    if (state.simTime < ai.commit.until && !(est.vx > 300 && est.x > robot.x + R)) {
+      ai.state = 'STRIKE'; ai.shot = ai.commit.shot; setRobotTarget(ai.commit.target); return;
+    }
+    ai.commit = null;
+  }
+  const speed = Math.hypot(est.vx, est.vy);
+  const sS = strikeSpeed(), wind = P.windup, tL = lungeTime(wind), margin = P.reactMargin / 1000;
+
+  if (est.vx < -40) {
+    const pred = predictPath(est.x, est.y, est.vx, est.vy, xDef);
+    ai.pred = pred;
+    if (pred && !pred.stopped) {
+      let chosen = null, deflect = null;
+      for (let xl = Math.min(robotXMax() + R * 0.7, est.x - R); xl >= xDef; xl -= 15) {
+        const pt = pointAtX(pred, xl);
+        if (!pt) continue;
+        const shot = chooseShot(pt);
+        const n = solveNormal(pt.vx, pt.vy, shot.g, sS);
+        const contact = { x: pt.x - n.x * R, y: pt.y - n.y * R };
+        if (inReach(contact)) {
+          const pre = clampRobot({ x: contact.x - n.x * wind, y: contact.y - n.y * wind });
+          if (timeToReach(pre) + tL + margin < pt.t) { chosen = { pt, shot, n, contact, pre }; break; }
+        }
+        if (!deflect) {
+          const n0 = solveNormal(pt.vx, pt.vy, shot.g, 0);
+          const c0 = { x: pt.x - n0.x * R, y: pt.y - n0.y * R };
+          if (inReach(c0) && timeToReach(c0) + margin < pt.t) deflect = { pt, shot, contact: c0 };
+        }
+      }
+      if (!chosen && deflect) {
+        ai.intercept = deflect.pt; ai.shot = deflect.shot; ai.state = 'DEFLECT';
+        setRobotTarget(deflect.contact); return;
+      }
+      if (chosen) {
+        ai.intercept = chosen.pt; ai.shot = chosen.shot;
+        if (chosen.pt.t > tL + 0.01) { ai.state = 'INTERCEPT'; setRobotTarget(chosen.pre); }
+        else {
+          const tgt = { x: chosen.contact.x + chosen.n.x * 150, y: chosen.contact.y + chosen.n.y * 150 };
+          ai.commit = { target: clampRobot(tgt), until: state.simTime + tL + 0.12, shot: chosen.shot };
+          ai.state = 'STRIKE'; setRobotTarget(tgt);
+        }
+        return;
+      }
+      const last = pointAtX(pred, xDef) || { x: xDef, y: H / 2, t: 0 };
+      ai.intercept = last; ai.state = 'BLOCK';
+      setRobotTarget({ x: xDef - R * 0.5, y: clamp(last.y, H / 2 - GOAL_W / 2, H / 2 + GOAL_W / 2) });
+      return;
+    }
+  }
+  const inOurHalf = est.x < robotXMax() + R * 0.8;
+  if (inOurHalf && (speed < 350 || (ai.pred && ai.pred.stopped))) {
+    const shot = chooseShot(est), g = shot.g;
+    ai.shot = shot;
+    const contact = { x: est.x - g.x * R, y: est.y - g.y * R };
+    const pre = { x: contact.x - g.x * wind, y: contact.y - g.y * wind };
+    const dPre = Math.hypot(robot.x - pre.x, robot.y - pre.y);
+    if (dPre < 25 && Math.hypot(robot.vx, robot.vy) < 400) {
+      const tgt = { x: contact.x + g.x * 150, y: contact.y + g.y * 150 };
+      ai.commit = { target: clampRobot(tgt), until: state.simTime + tL + 0.15, shot };
+      ai.state = 'STRIKE'; setRobotTarget(tgt);
+    } else if (robot.x > est.x - R * 0.3) {
+      ai.state = 'REPOSITION';
+      const side = robot.y < est.y ? -1 : 1;
+      const p = { x: est.x - R - 50, y: est.y + side * (R + 60) };
+      if (p.y < MALLET_R || p.y > H - MALLET_R) p.y = est.y - side * (R + 60);
+      setRobotTarget(p);
+    } else { ai.state = 'LINE UP'; setRobotTarget(pre); }
+    return;
+  }
+  ai.state = 'HOME'; setRobotTarget(home());
+}
+
+// ---------- Physics ----------
+function stepBody(b, tgt, vmax, amax, clampFn, dt, isRobot) {
+  const t = clampFn(tgt);
+  const ex = t.x - b.x, ey = t.y - b.y, dist = Math.hypot(ex, ey);
+  const want = Math.min(vmax, Math.sqrt(2 * amax * dist * 0.9));
+  const dvx0 = (dist > 1e-6 ? ex / dist * want : 0) - b.vx;
+  const dvy0 = (dist > 1e-6 ? ey / dist * want : 0) - b.vy;
+  const dvm = Math.hypot(dvx0, dvy0), lim = amax * dt, s = dvm > lim ? lim / dvm : 1;
+  b.vx += dvx0 * s; b.vy += dvy0 * s;
+  if (isRobot) { // servo line-speed limit on every cable
+    let worst = 0;
+    for (const sp of spools) {
+      const dx = b.x - sp.x, dy = b.y - sp.y, L = Math.hypot(dx, dy);
+      worst = Math.max(worst, Math.abs((dx * b.vx + dy * b.vy) / L));
+    }
+    const ll = lineLimit();
+    if (worst > ll) { b.vx *= ll / worst; b.vy *= ll / worst; }
+  }
+  b.x += b.vx * dt; b.y += b.vy * dt;
+  const c = clampFn(b);
+  if (c.x !== b.x) b.vx = 0;
+  if (c.y !== b.y) b.vy = 0;
+  b.x = c.x; b.y = c.y;
+}
+function stepPuck(dt) {
+  const r = PUCK_R, e = P.elasticity;
+  const sp = Math.hypot(puck.vx, puck.vy);
+  if (sp > 0) {
+    const ns = Math.max(0, sp * Math.exp(-P.drag * dt) - P.friction * dt);
+    puck.vx *= ns / sp; puck.vy *= ns / sp;
+  }
+  puck.x += puck.vx * dt; puck.y += puck.vy * dt;
+  if (puck.y < r) { puck.y = r; sWall(Math.abs(puck.vy)); puck.vy = -puck.vy * e; wallFlash.push({ x: puck.x, y: 0, t: 0.25 }); }
+  if (puck.y > H - r) { puck.y = H - r; sWall(Math.abs(puck.vy)); puck.vy = -puck.vy * e; wallFlash.push({ x: puck.x, y: H, t: 0.25 }); }
+  const mouthHalf = GOAL_W / 2 - r;
+  const inMouth = Math.abs(puck.y - H / 2) <= mouthHalf;
+  for (const side of [0, 1]) {
+    const beyond = side === 0 ? puck.x < r : puck.x > W - r;
+    if (!beyond) continue;
+    const centerPast = side === 0 ? puck.x < 0 : puck.x > W;
+    if (!inMouth && !centerPast) {
+      puck.x = side === 0 ? r : W - r; sWall(Math.abs(puck.vx)); puck.vx = -puck.vx * e;
+      wallFlash.push({ x: side === 0 ? 0 : W, y: puck.y, t: 0.25 });
+    } else if (!inMouth) {
+      puck.y = clamp(puck.y, H / 2 - mouthHalf, H / 2 + mouthHalf); puck.vy = -puck.vy * e;
+    }
+  }
+  if (puck.x < -r * 1.2) { goal(false); return true; }
+  if (puck.x > W + r * 1.2) { goal(true); return true; }
+  return false;
+}
+function collide(m) {
+  const R = PUCK_R + MALLET_R;
+  const dx = puck.x - m.x, dy = puck.y - m.y, d = Math.hypot(dx, dy);
+  if (d >= R || d < 1e-6) return;
+  const nx = dx / d, ny = dy / d;
+  const vn = (puck.vx - m.vx) * nx + (puck.vy - m.vy) * ny;
+  if (vn < 0) {
+    puck.vx -= (1 + P.restitution) * vn * nx; puck.vy -= (1 + P.restitution) * vn * ny;
+    if (vn < -150) sHit(-vn);
+  }
+  puck.x = m.x + nx * R; puck.y = m.y + ny * R;
+}
+function updateKinematics() {
+  for (let i = 0; i < 4; i++) {
+    kin.L[i] = Math.hypot(robot.x - spools[i].x, robot.y - spools[i].y);
+    if (kin.Lprev) kin.ang[i] += (kin.L[i] - kin.Lprev[i]) / (P.spoolD / 2);
+  }
+  kin.Lprev = kin.L.slice();
+}
+
+// ---------- Main loop ----------
+let lastT = performance.now(), textTimer = 0;
+function frame(now) {
+  const realDt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
+  if (!state.paused) {
+    computeEstimate();
+    aiUpdate();
+    const h = realDt / SUBSTEPS;
+    for (let i = 0; i < SUBSTEPS; i++) {
+      stepBody(robot, robotTarget, P.pusherMax, P.pusherAcc, clampRobot, h, true);
+      stepBody(human, humanTarget, P.humanMax, P.humanAcc, clampHuman, h, false);
+      state.simTime += h;
+      updateVision(h);
+      if (stepPuck(h)) break;
+      collide(robot); collide(human);
+      const sp = Math.hypot(puck.vx, puck.vy);
+      if (sp > MAX_PUCK_SPEED) { puck.vx *= MAX_PUCK_SPEED / sp; puck.vy *= MAX_PUCK_SPEED / sp; }
+    }
+    updateKinematics();
+    const psp = Math.hypot(puck.vx, puck.vy);
+    if (psp < 30) state.slowTimer += realDt; else state.slowTimer = 0;
+    const deadZone = puck.x > robotXMax() + PUCK_R + MALLET_R * 0.8 && puck.x < W / 2 + MALLET_R - PUCK_R;
+    if (state.slowTimer > (deadZone ? 2 : 8)) faceOff(puck.x < W / 2 ? 'robot' : 'human');
+    wallFlash = wallFlash.filter(f => (f.t -= realDt) > 0);
+  }
+  if (state.bannerTimer > 0 && (state.bannerTimer -= realDt) <= 0) $('banner').style.opacity = 0;
+  if ((textTimer -= realDt) <= 0) {
+    textTimer = 0.1;
+    $('brainText').textContent = state.brain && state.started
+      ? '🤖 ' + ai.state + (ai.shot && ai.state !== 'HOME' && ai.state !== 'BLOCK' ? ' → ' + ai.shot.name : '') : '';
+    $('brainText').style.visibility = $('brainText').textContent ? 'visible' : 'hidden';
+  }
+  draw();
+  requestAnimationFrame(frame);
+}
+
+// ---------- Rendering ----------
+function circle(c, x, y, r) { c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); }
+function roundRect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+}
+// Static table layer (frame, playfield, air holes, markings) rendered once per resize.
+function renderStatic() {
+  const c = bctx;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.fillStyle = '#121211'; c.fillRect(0, 0, bg.width, bg.height);
+  worldTransform(c);
+  c.fillStyle = '#262624'; roundRect(c, -118, -118, W + 236, H + 236, 30); c.fill();
+  c.fillStyle = '#4c5866'; roundRect(c, -24, -24, W + 48, H + 48, 18); c.fill();
+  const g = c.createLinearGradient(0, 0, W, 0);
+  g.addColorStop(0, '#dde8ef'); g.addColorStop(0.5, '#f2f7fa'); g.addColorStop(1, '#dde8ef');
+  c.fillStyle = g; c.fillRect(0, 0, W, H);
+  c.fillStyle = 'rgba(57,135,229,0.06)'; c.fillRect(0, 0, W / 2, H);
+  c.fillStyle = 'rgba(217,89,38,0.05)'; c.fillRect(W / 2, 0, W / 2, H);
+  c.fillStyle = 'rgba(40,60,80,0.12)'; c.beginPath();
+  for (let x = 25; x < W; x += 50) for (let y = 25; y < H; y += 50) { c.moveTo(x + 2.2, y); c.arc(x, y, 2.2, 0, Math.PI * 2); }
+  c.fill();
+  c.lineWidth = 5; c.strokeStyle = 'rgba(220,60,60,0.55)';
+  c.beginPath(); c.moveTo(W / 2, 0); c.lineTo(W / 2, H); c.stroke();
+  c.strokeStyle = 'rgba(60,110,200,0.45)'; c.lineWidth = 4;
+  circle(c, W / 2, H / 2, 110); c.stroke();
+  c.beginPath(); c.arc(0, H / 2, 170, -Math.PI / 2, Math.PI / 2); c.stroke();
+  c.beginPath(); c.arc(W, H / 2, 170, Math.PI / 2, Math.PI * 1.5); c.stroke();
+  c.fillStyle = '#101010';
+  c.fillRect(-24, H / 2 - GOAL_W / 2, 24, GOAL_W);
+  c.fillRect(W, H / 2 - GOAL_W / 2, 24, GOAL_W);
+  c.setLineDash([6 / view.sc, 5 / view.sc]); c.strokeStyle = 'rgba(57,135,229,0.4)'; c.lineWidth = 1.2 / view.sc;
+  c.strokeRect(MALLET_R, MALLET_R, robotXMax() - MALLET_R, H - 2 * MALLET_R); c.setLineDash([]);
+  screenTransform(c);
+  c.font = '700 12px -apple-system, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  let p = toScreen(W * 0.25, H / 2); c.fillStyle = 'rgba(57,135,229,0.45)'; c.fillText('ROBOT', p.x, p.y);
+  p = toScreen(W * 0.75, H / 2); c.fillStyle = 'rgba(217,89,38,0.5)'; c.fillText('YOU', p.x, p.y);
+}
+function drawMallet(c, m, c0, c1, ring) {
+  c.fillStyle = 'rgba(0,0,0,0.2)'; circle(c, m.x + 6, m.y - 4, MALLET_R); c.fill();
+  const mg = c.createRadialGradient(m.x - 12, m.y + 12, 5, m.x, m.y, MALLET_R);
+  mg.addColorStop(0, c0); mg.addColorStop(1, c1);
+  c.fillStyle = mg; circle(c, m.x, m.y, MALLET_R); c.fill();
+  c.strokeStyle = ring; c.lineWidth = 5; circle(c, m.x, m.y, MALLET_R - 3); c.stroke();
+  c.fillStyle = '#f5f5f5'; circle(c, m.x, m.y, 9); c.fill();
+}
+function drawSpool(c, i) {
+  const s = spools[i], r = SPOOL_DRAW_R;
+  c.fillStyle = '#1a1a19'; circle(c, s.x, s.y, r + 8); c.fill();
+  c.strokeStyle = COLORS[i]; c.lineWidth = 7; circle(c, s.x, s.y, r - 2); c.stroke();
+  c.fillStyle = '#3b3b38'; circle(c, s.x, s.y, r - 6); c.fill();
+  c.strokeStyle = '#c3c2b7'; c.lineWidth = 3;
+  for (let k = 0; k < 3; k++) {
+    const a = kin.ang[i] + k * Math.PI * 2 / 3;
+    c.beginPath(); c.moveTo(s.x, s.y); c.lineTo(s.x + Math.cos(a) * (r - 8), s.y + Math.sin(a) * (r - 8)); c.stroke();
+  }
+  c.fillStyle = '#fff'; circle(c, s.x, s.y, 5); c.fill();
+}
+function draw() {
+  const c = ctx, px = n => n / view.sc;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.drawImage(bg, 0, 0);
+
+  // Big faded scores beside the centre line
+  screenTransform(c);
+  c.font = '800 44px -apple-system, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  let p = toScreen(W / 2 - 110, H - 90); c.fillStyle = 'rgba(57,135,229,0.35)'; c.fillText(state.score.robot, p.x, p.y);
+  p = toScreen(W / 2 + 110, H - 90); c.fillStyle = 'rgba(217,89,38,0.4)'; c.fillText(state.score.human, p.x, p.y);
+
+  worldTransform(c);
+  for (const f of wallFlash) { c.fillStyle = `rgba(217,89,38,${f.t * 2.4})`; circle(c, f.x, f.y, 18 + (0.25 - f.t) * 120); c.fill(); }
+
+  if (state.brain && state.started) {
+    if (ai.pred) {
+      c.strokeStyle = '#b8437a'; c.lineWidth = px(2); c.setLineDash([px(7), px(5)]);
+      c.beginPath(); c.moveTo(ai.pred.segs[0].x0, ai.pred.segs[0].y0);
+      for (const s of ai.pred.segs) c.lineTo(s.x1, s.y1);
+      c.stroke(); c.setLineDash([]);
+      c.fillStyle = '#b8437a';
+      for (let i = 0; i < ai.pred.segs.length - 1; i++) { circle(c, ai.pred.segs[i].x1, ai.pred.segs[i].y1, px(4)); c.fill(); }
+    }
+    if (ai.intercept) {
+      const ip = ai.intercept, rr = PUCK_R;
+      c.strokeStyle = '#b8437a'; c.lineWidth = px(2);
+      circle(c, ip.x, ip.y, rr); c.stroke();
+      c.beginPath(); c.moveTo(ip.x - rr - 10, ip.y); c.lineTo(ip.x + rr + 10, ip.y);
+      c.moveTo(ip.x, ip.y - rr - 10); c.lineTo(ip.x, ip.y + rr + 10); c.stroke();
+    }
+    if (ai.shot && ai.state !== 'HOME' && ai.state !== 'BLOCK') {
+      c.strokeStyle = 'rgba(57,135,229,0.8)'; c.lineWidth = px(2); c.setLineDash([px(2), px(5)]);
+      c.beginPath(); c.moveTo(ai.shot.path[0].x, ai.shot.path[0].y);
+      for (const q of ai.shot.path.slice(1)) c.lineTo(q.x, q.y);
+      c.stroke(); c.setLineDash([]);
+    }
+  }
+
+  for (let i = 0; i < 4; i++) {
+    const s = spools[i];
+    c.strokeStyle = COLORS[i]; c.lineWidth = px(2.2);
+    c.beginPath(); c.moveTo(s.x, s.y); c.lineTo(robot.x, robot.y); c.stroke();
+  }
+
+  c.fillStyle = 'rgba(0,0,0,0.18)'; circle(c, puck.x + 5, puck.y - 3, PUCK_R); c.fill();
+  c.fillStyle = '#1b1f24'; circle(c, puck.x, puck.y, PUCK_R); c.fill();
+  c.strokeStyle = '#4a525c'; c.lineWidth = 4; circle(c, puck.x, puck.y, PUCK_R - 7); c.stroke();
+  if (state.brain && state.started && cam.est) {
+    c.strokeStyle = '#8c3cc8'; c.lineWidth = px(1.5); c.setLineDash([px(3), px(3)]);
+    circle(c, cam.est.x, cam.est.y, PUCK_R + 5); c.stroke(); c.setLineDash([]);
+  }
+
+  drawMallet(c, robot, '#5d6c7e', '#2c3642', '#3987e5');
+  drawMallet(c, human, '#e0775a', '#9c3a22', '#ffd2c2');
+  for (let i = 0; i < 4; i++) drawSpool(c, i);
+}
+
+// ---------- Start ----------
+applyDiff('normal');
+resize();
+updateKinematics();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
